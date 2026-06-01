@@ -4,7 +4,7 @@ import { eq, and } from "drizzle-orm";
 import { notFound, redirect } from "next/navigation";
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { validateDatapoint } from "@/services/validation";
+import { validateExtractedField } from "@/services/validation";
 
 export default async function ValidationPage({
   params,
@@ -42,8 +42,7 @@ export default async function ValidationPage({
   async function confirmValidation(formData: FormData) {
     "use server";
     const valueId = formData.get("datapointValueId") as string;
-    const extractedVal = formData.get("extractedValue") as string;
-    const pageRef = parseInt(formData.get("pageReference") as string) || 1;
+    const extractedFieldId = formData.get("extractedFieldId") as string;
 
     // Recupera l'organizzazione reale dal progetto
     const project = await db.query.projects.findFirst({
@@ -65,14 +64,7 @@ export default async function ValidationPage({
       }).returning();
     }
 
-    await validateDatapoint(
-      valueId,
-      extractedVal,
-      documentId,
-      pageRef,
-      user.id,
-      project.organizationId!
-    );
+    await validateExtractedField(projectId, valueId, extractedFieldId, user.id);
 
     redirect(`/dashboard/${projectId}`);
   }
@@ -98,7 +90,7 @@ export default async function ValidationPage({
                 <CardDescription>Datapoint VSME: {field.datapointId}</CardDescription>
               </CardHeader>
               <CardContent className="pt-4 space-y-4">
-                
+
                 <div className="grid grid-cols-2 gap-4">
                   <div className="p-3 bg-slate-50 rounded-md border">
                     <p className="text-xs font-semibold text-slate-500 uppercase mb-1">Baseline Attuale</p>
@@ -127,9 +119,8 @@ export default async function ValidationPage({
                 {baselineMatch && (
                   <form action={confirmValidation}>
                     <input type="hidden" name="datapointValueId" value={baselineMatch.id} />
-                    <input type="hidden" name="extractedValue" value={field.value!} />
-                    <input type="hidden" name="pageReference" value={field.pageReference?.toString()} />
-                    
+                    <input type="hidden" name="extractedFieldId" value={field.id} />
+
                     <Button type="submit" className="w-full bg-blue-600 hover:bg-blue-700">
                       Accetta e Sovrascrivi Baseline
                     </Button>

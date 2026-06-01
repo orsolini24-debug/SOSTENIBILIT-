@@ -1,16 +1,17 @@
 "use server";
 
 import { db } from "@/db";
-import { documents, extractionRuns, extractedFields, datapointValues, auditEvents } from "@/db/schema";
+import { documents, extractionRuns, extractedFields } from "@/db/schema";
 import { put } from "@vercel/blob";
 import { parseDocument } from "@/services/document-parser";
+import { validateExtractedField } from "@/services/validation";
 import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
 
 export async function uploadAndParseDocument(projectId: string, formData: FormData) {
   // Utilizziamo require all'interno della funzione per evitare problemi durante il build statico
   const pdf = require("pdf-parse");
-  
+
   const file = formData.get("file") as File;
   const documentType = formData.get("type") as "bolletta" | "hr" | "rifiuti";
 
@@ -80,35 +81,9 @@ export async function uploadAndParseDocument(projectId: string, formData: FormDa
 }
 
 export async function validateDatapoint(projectId: string, datapointValueId: string, extractedFieldId: string) {
-  // 1. Recupera il campo estratto
-  const field = await db.query.extractedFields.findFirst({
-    where: (ef, { eq }) => eq(ef.id, extractedFieldId),
-  });
-
-  if (!field) throw new Error("Campo estratto non trovato");
-
-  // 2. Recupera il valore attuale del datapoint (la stima)
-  const [oldValue] = await db.select().from(datapointValues).where(eq(datapointValues.id, datapointValueId));
-
-  // 3. Aggiorna con il dato reale
-  const [newValue] = await db.update(datapointValues).set({
-    value: field.value,
-    state: "manually_validated",
-    confidence: "Alta", // O mappato dal campo
-    updatedAt: new Date(),
-  }).where(eq(datapointValues.id, datapointValueId)).returning();
-
-  // 4. Registra evento di validazione/audit
-  await db.insert(auditEvents).values({
-    projectId,
-    entityType: "datapoint_value",
-    entityId: datapointValueId,
-    action: "validate_from_extraction",
-    oldValue: oldValue,
-    newValue: newValue,
-    metadata: { extractedFieldId, source: "AI Extraction" }
-  });
-
+  // Delega alla fonte di verità unica (services/validation.ts): scrive evidence_link,
+  // validation_event e audit_event e applica i sanity-check settoriali.
+  const result = await validateExtractedField(projectId, datapointValueId, extractedFieldId);
   revalidatePath(`/dashboard/${projectId}`);
-  return { success: true };
+  return { success: true, anomaly: result.anomaly };
 }

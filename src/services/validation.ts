@@ -1,85 +1,139 @@
 import { db } from "@/db";
-import { datapointValues, evidenceLinks, auditEvents, validationEvents, companies, projects } from "@/db/schema";
+import {
+  datapointValues,
+  evidenceLinks,
+  auditEvents,
+  validationEvents,
+  companies,
+  projects,
+  extractedFields,
+  extractionRuns,
+} from "@/db/schema";
 import { eq } from "drizzle-orm";
 
-export async function validateDatapoint(
-  datapointValueId: string, 
-  extractedValue: string, 
-  documentId: string, 
-  pageReference: number, 
-  userId: string,
-  organizationId: string
-) {
-  // 1. Recupera il record precedente (per l'audit e per sapere che datapoint è)
-  const oldValue = await db.query.datapointValues.findFirst({
-    where: eq(datapointValues.id, datapointValueId)
-  });
+export interface ValidateResult {
+  success: boolean;
+  anomaly?: string;
+  data?: typeof datapointValues.$inferSelect;
+}
 
+/**
+ * Fonte di verita UNICA per la validazione di un datapoint a partire da un campo
+ * estratto dall'AI. Promuove la stima ("estimated") a "manually_validated" e scrive
+ * l'intero lineage: evidence_link + validation_event + audit_event. Applica anche i
+ * sanity-check settoriali (es. consumi elettrici vs superficie).
+ *
+ * Tutto (valore, documento, pagina) viene derivato da extractedFieldId, cosi i diversi
+ * punti della UI non devono ripetere la logica. userId e opzionale finche l'auth e mock.
+ */
+export async function validateExtractedField(
+  projectId: string,
+  datapointValueId: string,
+  extractedFieldId: string,
+  userId: string | null = null,
+): Promise<ValidateResult> {
+  // 1. Campo estratto (valore reale + pagina + run di estrazione)
+  const [field] = await db
+    .select()
+    .from(extractedFields)
+    .where(eq(extractedFields.id, extractedFieldId))
+    .limit(1);
+  if (!field) throw new Error("Campo estratto non trovato");
+
+  // 2. Documento di origine (via extraction run) -> lineage probatorio
+  let documentId: string | null = null;
+  if (field.extractionRunId) {
+    const [run] = await db
+      .select({ documentId: extractionRuns.documentId })
+      .from(extractionRuns)
+      .where(eq(extractionRuns.id, field.extractionRunId))
+      .limit(1);
+    documentId = run?.documentId ?? null;
+  }
+
+  // 3. Valore precedente (la stima) - necessario per audit e transizione di stato
+  const [oldValue] = await db
+    .select()
+    .from(datapointValues)
+    .where(eq(datapointValues.id, datapointValueId))
+    .limit(1);
   if (!oldValue) throw new Error("Datapoint Value non trovato");
 
-  // 1b. Anomaly Detection: Controllo logico di base (es. consumi vs cubatura)
-  // Recuperiamo l'azienda collegata al progetto
-  const project = await db.query.projects.findFirst({
-    where: eq(projects.id, oldValue.projectId!)
-  });
-  
-  if (project && project.companyId) {
-    const company = await db.query.companies.findFirst({
-      where: eq(companies.id, project.companyId)
-    });
+  // 4. Contesto progetto/azienda (organizationId + dati per i sanity-check)
+  const [project] = await db
+    .select()
+    .from(projects)
+    .where(eq(projects.id, projectId))
+    .limit(1);
+  const organizationId = project?.organizationId ?? null;
 
-    if (company && oldValue.datapointId === "VSME-B1") {
-       const numericValue = parseFloat(extractedValue);
-       const area = company.facilityArea || 0;
-       if (area > 0 && numericValue > 0) {
-          const ratio = numericValue / area;
-          // Un rapporto anomalo (> 1000 kWh/mq) potrebbe indicare un errore di estrazione o unità (es. Wh invece di kWh)
-          if (ratio > 1000) {
-             console.warn(`[Anomaly] Rapporto kWh/mq troppo alto (${ratio}). Possibile errore OCR.`);
-             // In una versione più evoluta, potremmo passare a 'Pending Review' invece di 'Validato'
-             // o restituire un alert alla UI.
-          }
-       }
+  // 4b. Sanity-check settoriale: rapporto consumi elettrici / superficie
+  let anomaly: string | undefined;
+  if (project?.companyId && oldValue.datapointId === "VSME-B1") {
+    const [company] = await db
+      .select()
+      .from(companies)
+      .where(eq(companies.id, project.companyId))
+      .limit(1);
+    const area = company?.facilityArea ?? 0;
+    const numericValue = parseFloat(field.value ?? "");
+    if (area > 0 && numericValue > 0) {
+      const ratio = numericValue / area;
+      if (ratio > 1000) {
+        anomaly = `Rapporto kWh/mq anomalo (${Math.round(ratio)}). Possibile errore di unita (Wh vs kWh) o OCR.`;
+        console.warn(`[Anomaly] ${anomaly}`);
+      }
     }
   }
 
-  // 2. Aggiorna il record a "manually_validated"
-  const [updatedValue] = await db.update(datapointValues).set({
-    value: extractedValue,
-    state: "manually_validated",
-    confidence: "Alta",
-    sourceDocumentId: documentId,
-    updatedAt: new Date(),
-  }).where(eq(datapointValues.id, datapointValueId)).returning();
+  // 5. Promozione del datapoint a "manually_validated"
+  const [newValue] = await db
+    .update(datapointValues)
+    .set({
+      value: field.value,
+      state: "manually_validated",
+      confidence: "Alta",
+      sourceDocumentId: documentId,
+      updatedAt: new Date(),
+    })
+    .where(eq(datapointValues.id, datapointValueId))
+    .returning();
 
-  // 3. Crea il link probatorio (Evidence Link)
-  await db.insert(evidenceLinks).values({
-    datapointValueId: updatedValue.id,
-    documentId: documentId,
-    pageReference: pageReference,
-  });
+  // 6. Evidence link (collega il dato alla pagina del documento)
+  if (documentId) {
+    await db.insert(evidenceLinks).values({
+      datapointValueId: newValue.id,
+      documentId,
+      pageReference: field.pageReference ?? null,
+    });
+  }
 
-  // 4. Registra l'evento logico di Validazione
+  // 7. Evento di validazione (userId nullable finche l'auth e mock)
   await db.insert(validationEvents).values({
-    datapointValueId: updatedValue.id,
-    userId: userId,
+    datapointValueId: newValue.id,
+    userId,
     action: "approved",
-    previousState: oldValue.state as any,
+    previousState: oldValue.state,
     newState: "manually_validated",
     reason: "Approvazione utente dopo estrazione documentale",
   });
 
-  // 5. Scrivi l'Audit Trail Immutabile
+  // 8. Audit trail immutabile
   await db.insert(auditEvents).values({
-    organizationId: organizationId,
-    projectId: updatedValue.projectId!,
+    organizationId,
+    projectId,
     entityType: "datapoint_value",
-    entityId: updatedValue.id,
+    entityId: newValue.id,
     action: "validate_from_extraction",
-    oldValue: oldValue,
-    newValue: updatedValue,
-    metadata: { sourceDocumentId: documentId, pageReference }
+    oldValue,
+    newValue,
+    metadata: {
+      extractedFieldId,
+      documentId,
+      pageReference: field.pageReference,
+      anomaly: anomaly ?? null,
+    },
   });
 
-  return { success: true, data: updatedValue };
+  return { success: true, anomaly, data: newValue };
 }

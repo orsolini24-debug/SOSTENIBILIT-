@@ -210,7 +210,7 @@ export default async function ProjectDashboard({
                   <TableCell className="text-muted-foreground">{row.unit}</TableCell>
                   <TableCell>
                     <Badge variant={getStateBadgeVariant(row.state)}>
-                      {row.state}
+                      {DATAPOINT_STATE_LABELS[row.state] ?? row.state}
                     </Badge>
                   </TableCell>
                   <TableCell>
