@@ -1,4 +1,4 @@
-import { pgTable, text, uuid, integer, timestamp, jsonb, pgEnum, numeric } from "drizzle-orm/pg-core";
+import { pgTable, text, uuid, integer, timestamp, jsonb, pgEnum, numeric, index } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 export const datapointStateEnum = pgEnum("datapoint_state", [
@@ -84,11 +84,53 @@ export const datapointValues = pgTable("datapoint_values", {
   id: uuid("id").defaultRandom().primaryKey(),
   projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }),
   datapointId: text("datapoint_id").references(() => datapoints.id),
-  value: text("value"),
+  
+  // Values
+  value: text("value"), // normalized_value
+  rawValue: text("raw_value"),
+  unitRaw: text("unit_raw"),
+  unitNormalized: text("unit_normalized"),
+  period: text("period").default("FY"),
+  year: integer("year"),
+  disclosureId: text("disclosure_id"),
+  frameworkConceptId: text("framework_concept_id"),
+
+  // Process & Status
   state: datapointStateEnum("state").default("estimated").notNull(),
   confidence: confidenceEnum("confidence").default("Bassa").notNull(),
+  extractionMethod: text("extraction_method").default("manual"),
+  validationStatus: text("validation_status").default("pending"),
+  reviewerDecision: text("reviewer_decision"),
+  version: integer("version").default(1),
+  lineageHash: text("lineage_hash"),
+
+  // Evidence
   sourceDocumentId: uuid("source_document_id").references(() => documents.id, { onDelete: "set null" }),
+  page: integer("page"),
+  tableCoordinates: jsonb("table_coordinates"),
+  evidenceText: text("evidence_text"),
+  evidenceHash: text("evidence_hash"),
   evidenceNotes: text("evidence_notes"),
+
+  // Operational Lineage (JSONB for extensibility)
+  provenance: jsonb("provenance").$type<{
+    extraction_run_id?: string;
+    parser_name?: string;
+    parser_version?: string;
+    model_name?: string;
+    model_version?: string;
+    prompt_version?: string;
+    validator_version?: string;
+    retrieval_query?: string;
+    retrieval_rank?: number;
+    chunk_id?: string;
+    document_version?: string;
+    source_file_hash?: string;
+    created_by?: string;
+    reviewed_by?: string;
+    reviewed_at?: string;
+  }>().default({}),
+
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -168,65 +210,16 @@ export const extractedFields = pgTable("extracted_fields", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-// Relations
-export const organizationsRelations = relations(organizations, ({ many }) => ({
-  companies: many(companies),
-  projects: many(projects),
-  users: many(users),
-}));
-
-export const companiesRelations = relations(companies, ({ one, many }) => ({
-  organization: one(organizations, {
-    fields: [companies.organizationId],
-    references: [organizations.id],
-  }),
-  projects: many(projects),
-}));
-
-export const projectsRelations = relations(projects, ({ one, many }) => ({
-  organization: one(organizations, {
-    fields: [projects.organizationId],
-    references: [organizations.id],
-  }),
-  company: one(companies, {
-    fields: [projects.companyId],
-    references: [companies.id],
-  }),
-  documents: many(documents),
-  datapointValues: many(datapointValues),
-}));
-
-export const documentsRelations = relations(documents, ({ one, many }) => ({
-  project: one(projects, {
-    fields: [documents.projectId],
-    references: [projects.id],
-  }),
-  datapointValues: many(datapointValues),
-}));
-
-export const datapointValuesRelations = relations(datapointValues, ({ one, many }) => ({
-  project: one(projects, {
-    fields: [datapointValues.projectId],
-    references: [projects.id],
-  }),
-  datapoint: one(datapoints, {
-    fields: [datapointValues.datapointId],
-    references: [datapoints.id],
-  }),
-  sourceDocument: one(documents, {
-    fields: [datapointValues.sourceDocumentId],
-    references: [documents.id],
-  }),
-  evidenceLinks: many(evidenceLinks),
-}));
-
-export const evidenceLinksRelations = relations(evidenceLinks, ({ one }) => ({
-  datapointValue: one(datapointValues, {
-    fields: [evidenceLinks.datapointValueId],
-    references: [datapointValues.id],
-  }),
-  document: one(documents, {
-    fields: [evidenceLinks.documentId],
-    references: [documents.id],
-  }),
-}));
+export const documentChunks = pgTable("document_chunks", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  documentId: uuid("document_id").references(() => documents.id, { onDelete: "cascade" }).notNull(),
+  page: integer("page").notNull(),
+  tableId: text("table_id"),
+  rowIdx: integer("row_idx"),
+  colIdx: integer("col_idx"),
+  heading: text("heading"),
+  bbox: jsonb("bbox"),
+  sourceHash: text("source_hash").notNull(),
+  text: text("text").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+}, (table) =
