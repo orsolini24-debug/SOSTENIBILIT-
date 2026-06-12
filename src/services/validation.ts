@@ -8,6 +8,7 @@ import {
   projects,
   extractedFields,
   extractionRuns,
+  extractionCandidates,
 } from "@/db/schema";
 import { eq } from "drizzle-orm";
 
@@ -33,12 +34,35 @@ export async function validateExtractedField(
   userId: string | null = null,
 ): Promise<ValidateResult> {
   // 1. Campo estratto (valore reale + pagina + run di estrazione)
-  const [field] = await db
+  // Cerca prima in extractedFields (legacy), se non trovato in extractionCandidates (V8)
+  let field: any = null;
+  const efResult = await db
     .select()
     .from(extractedFields)
     .where(eq(extractedFields.id, extractedFieldId))
     .limit(1);
-  if (!field) throw new Error("Campo estratto non trovato");
+    
+  if (efResult.length > 0) {
+     field = efResult[0];
+  } else {
+     const ecResult = await db
+      .select({
+         id: extractionCandidates.id,
+         extractionRunId: extractionCandidates.extractionRunId,
+         datapointId: extractionCandidates.datapointId,
+         value: extractionCandidates.rawValue,
+         pageReference: extractionCandidates.pageReference,
+      })
+      .from(extractionCandidates)
+      .where(eq(extractionCandidates.id, extractedFieldId))
+      .limit(1);
+      
+     if (ecResult.length > 0) {
+        field = ecResult[0];
+     }
+  }
+
+  if (!field) throw new Error("Campo estratto non trovato in nessuna tabella candidate");
 
   // 2. Documento di origine (via extraction run) -> lineage probatorio
   let documentId: string | null = null;
