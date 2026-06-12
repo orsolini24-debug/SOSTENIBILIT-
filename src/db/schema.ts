@@ -222,4 +222,208 @@ export const documentChunks = pgTable("document_chunks", {
   sourceHash: text("source_hash").notNull(),
   text: text("text").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
-}, (table) =
+}, (table) => ({
+  docPageIdx: index("doc_page_idx").on(table.documentId, table.page),
+}));
+
+export const extractionCandidates = pgTable("extraction_candidates", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  extractionRunId: uuid("extraction_run_id").references(() => extractionRuns.id, { onDelete: "cascade" }),
+  datapointId: text("datapoint_id").references(() => datapoints.id),
+  rawValue: text("raw_value"),
+  normalizedValue: text("normalized_value"),
+  unitRaw: text("unit_raw"),
+  unitNormalized: text("unit_normalized"),
+  confidence: confidenceEnum("confidence").default("Bassa"),
+  pageReference: integer("page_reference"),
+  evidenceText: text("evidence_text"),
+  tableCoordinates: jsonb("table_coordinates"),
+  metadata: jsonb("metadata").default({}),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const validationResults = pgTable("validation_results", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  datapointValueId: uuid("datapoint_value_id").references(() => datapointValues.id, { onDelete: "cascade" }),
+  ruleId: text("rule_id").notNull(),
+  status: text("status").notNull(), // 'pass', 'fail', 'warning'
+  message: text("message"),
+  metadata: jsonb("metadata").default({}),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const reviewDecisions = pgTable("review_decisions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  datapointValueId: uuid("datapoint_value_id").references(() => datapointValues.id, { onDelete: "cascade" }),
+  userId: uuid("user_id").references(() => users.id),
+  decision: text("decision").notNull(), // 'approved', 'rejected', 'corrected'
+  comment: text("comment"),
+  correctedValue: text("corrected_value"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const vsmeMapping = pgTable("vsme_mapping", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  vsmeId: text("vsme_id").references(() => datapoints.id),
+  externalFramework: text("external_framework").notNull(), // e.g. 'ESRS', 'GRI'
+  externalId: text("external_id").notNull(),
+  mappingType: text("mapping_type").default("direct"), // 'direct', 'derived', 'proxy'
+  metadata: jsonb("metadata").default({}),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const clusterDefinitions = pgTable("cluster_definitions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  name: text("name").notNull(),
+  atecoPrefix: text("ateco_prefix").notNull(),
+  sizeClass: text("size_class").notNull(), // 'micro', 'small', 'medium', 'large'
+  description: text("description"),
+  metadata: jsonb("metadata").default({}),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const sectorDistributions = pgTable("sector_distributions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  clusterId: uuid("cluster_id").references(() => clusterDefinitions.id, { onDelete: "cascade" }),
+  indicatorId: text("indicator_id").references(() => datapoints.id),
+  p25: numeric("p25", { precision: 15, scale: 4 }),
+  median: numeric("median", { precision: 15, scale: 4 }),
+  p75: numeric("p75", { precision: 15, scale: 4 }),
+  nSamples: integer("n_sample"),
+  sourceType: text("source_type").default("statistical"), // 'statistical', 'client_flywheel'
+  period: text("period").default("FY2024"),
+  version: text("version").default("1.0"),
+  computedAt: timestamp("computed_at").defaultNow(),
+});
+
+// Relations
+export const organizationsRelations = relations(organizations, ({ many }) => ({
+  companies: many(companies),
+  projects: many(projects),
+  users: many(users),
+}));
+
+export const companiesRelations = relations(companies, ({ one, many }) => ({
+  organization: one(organizations, {
+    fields: [companies.organizationId],
+    references: [organizations.id],
+  }),
+  projects: many(projects),
+}));
+
+export const projectsRelations = relations(projects, ({ one, many }) => ({
+  organization: one(organizations, {
+    fields: [projects.organizationId],
+    references: [organizations.id],
+  }),
+  company: one(companies, {
+    fields: [projects.companyId],
+    references: [companies.id],
+  }),
+  documents: many(documents),
+  datapointValues: many(datapointValues),
+}));
+
+export const documentsRelations = relations(documents, ({ one, many }) => ({
+  project: one(projects, {
+    fields: [documents.projectId],
+    references: [projects.id],
+  }),
+  datapointValues: many(datapointValues),
+  chunks: many(documentChunks),
+}));
+
+export const documentChunksRelations = relations(documentChunks, ({ one }) => ({
+  document: one(documents, {
+    fields: [documentChunks.documentId],
+    references: [documents.id],
+  }),
+}));
+
+export const extractionRunsRelations = relations(extractionRuns, ({ one, many }) => ({
+  document: one(documents, {
+    fields: [extractionRuns.documentId],
+    references: [documents.id],
+  }),
+  candidates: many(extractionCandidates),
+}));
+
+export const extractionCandidatesRelations = relations(extractionCandidates, ({ one }) => ({
+  run: one(extractionRuns, {
+    fields: [extractionCandidates.extractionRunId],
+    references: [extractionRuns.id],
+  }),
+  datapoint: one(datapoints, {
+    fields: [extractionCandidates.datapointId],
+    references: [datapoints.id],
+  }),
+}));
+
+export const validationResultsRelations = relations(validationResults, ({ one }) => ({
+  datapointValue: one(datapointValues, {
+    fields: [validationResults.datapointValueId],
+    references: [datapointValues.id],
+  }),
+}));
+
+export const reviewDecisionsRelations = relations(reviewDecisions, ({ one }) => ({
+  datapointValue: one(datapointValues, {
+    fields: [reviewDecisions.datapointValueId],
+    references: [datapointValues.id],
+  }),
+  user: one(users, {
+    fields: [reviewDecisions.userId],
+    references: [users.id],
+  }),
+}));
+
+export const vsmeMappingRelations = relations(vsmeMapping, ({ one }) => ({
+  vsme: one(datapoints, {
+    fields: [vsmeMapping.vsmeId],
+    references: [datapoints.id],
+  }),
+}));
+
+export const clusterDefinitionsRelations = relations(clusterDefinitions, ({ many }) => ({
+  distributions: many(sectorDistributions),
+}));
+
+export const sectorDistributionsRelations = relations(sectorDistributions, ({ one }) => ({
+  cluster: one(clusterDefinitions, {
+    fields: [sectorDistributions.clusterId],
+    references: [clusterDefinitions.id],
+  }),
+  indicator: one(datapoints, {
+    fields: [sectorDistributions.indicatorId],
+    references: [datapoints.id],
+  }),
+}));
+
+export const datapointValuesRelations = relations(datapointValues, ({ one, many }) => ({
+  project: one(projects, {
+    fields: [datapointValues.projectId],
+    references: [projects.id],
+  }),
+  datapoint: one(datapoints, {
+    fields: [datapointValues.datapointId],
+    references: [datapoints.id],
+  }),
+  sourceDocument: one(documents, {
+    fields: [datapointValues.sourceDocumentId],
+    references: [documents.id],
+  }),
+  evidenceLinks: many(evidenceLinks),
+  validationResults: many(validationResults),
+  reviewDecisions: many(reviewDecisions),
+}));
+
+export const evidenceLinksRelations = relations(evidenceLinks, ({ one }) => ({
+  datapointValue: one(datapointValues, {
+    fields: [evidenceLinks.datapointValueId],
+    references: [datapointValues.id],
+  }),
+  document: one(documents, {
+    fields: [evidenceLinks.documentId],
+    references: [documents.id],
+  }),
+}));
