@@ -16,7 +16,7 @@ export interface ExtractedField {
 }
 
 export async function parseDocument(documentText: string, documentType: "bolletta" | "hr" | "rifiuti"): Promise<ExtractedField[]> {
-  console.log(`Avvio parsing reale per documento tipo: ${documentType} con modello ${AI_MODELS.SDK_PARSER_ID}`);
+  console.log(`Avvio parsing reale per documento tipo: ${documentType} con modello ${AI_MODELS.PARSER_MODEL}`);
 
   // Se manca la chiave usiamo il mock (Fallback per sviluppo locale)
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -37,7 +37,7 @@ export async function parseDocument(documentText: string, documentType: "bollett
   }
 
   const { object } = await generateObject({
-    model: anthropic(AI_MODELS.SDK_PARSER_ID),
+    model: anthropic(AI_MODELS.PARSER_MODEL),
     schema: z.object({
 
       extracted_fields: z.array(

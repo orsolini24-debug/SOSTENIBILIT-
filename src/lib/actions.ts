@@ -20,20 +20,12 @@ export async function uploadAndParseDocument(projectId: string, formData: FormDa
     throw new Error("Nessun file caricato");
   }
 
-  // 1. Upload su Vercel Blob (strategia PRIVATA richiesta)
-  // NOTA: Vercel Blob Ã¨ pubblico per design. Implementiamo un blocco per dati reali 
-  // e usiamo un flag di sicurezza finchÃ© non si integra S3/storage privato.
+  // 1. Upload su Vercel Blob (strategia PRIVATA)
   let storagePath = "";
   if (process.env.BLOB_READ_WRITE_TOKEN) {
-    // BLOCCO SICUREZZA: Impediamo upload se il file sembra contenere dati sensibili reali (mock check)
-    if (file.name.toLowerCase().includes("confidenziale") || file.name.toLowerCase().includes("bilancio_reale")) {
-      throw new Error("Sicurezza: Upload di documenti reali bloccato. Usa solo documenti di test/demo.");
-    }
-    
-    // Usiamo access: "public" ma con un warning che il file Ã¨ esposto.
-    // In produzione questo deve essere sostituito da una firma privata.
+    // Usiamo access: "private" come supportato da @vercel/blob
     const blob = await put(`vault/${Date.now()}-${file.name}`, file, { 
-      access: "public",
+      access: "private",
       addRandomSuffix: true 
     });
     storagePath = blob.url;

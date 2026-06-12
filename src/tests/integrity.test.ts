@@ -60,8 +60,8 @@ async function runTests() {
 
     // 3. Lineage modello
     console.log("Test 3: Lineage modello...");
-    if (!AI_MODELS.PARSER_MODEL || !AI_MODELS.SDK_PARSER_ID) {
-      throw new Error("Test 3 Failed: Models not defined");
+    if (AI_MODELS.PARSER_MODEL !== "claude-sonnet-4-6") {
+      throw new Error(`Test 3 Failed: Model is ${AI_MODELS.PARSER_MODEL} instead of claude-sonnet-4-6`);
     }
     console.log("✅ Test 3 Passed.");
 
