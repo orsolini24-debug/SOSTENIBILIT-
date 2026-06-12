@@ -1,0 +1,2 @@
+ALTER TABLE "document_chunks" ADD COLUMN "chunk_idx" integer DEFAULT 0 NOT NULL;--> statement-breakpoint
+ALTER TABLE "document_chunks" ADD CONSTRAINT "source_page_chunk_unq" UNIQUE("source_hash","page","chunk_idx");

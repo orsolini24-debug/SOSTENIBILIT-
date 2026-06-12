@@ -43,6 +43,13 @@
       "when": 1781269123930,
       "tag": "0005_unusual_network",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1781274482519,
+      "tag": "0006_concerned_squadron_sinister",
+      "breakpoints": true
     }
   ]
 }

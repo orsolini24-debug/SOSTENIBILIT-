@@ -217,6 +217,7 @@ export const documentChunks = pgTable("document_chunks", {
   id: uuid("id").defaultRandom().primaryKey(),
   documentId: uuid("document_id").references(() => documents.id, { onDelete: "cascade" }).notNull(),
   page: integer("page").notNull(),
+  chunkIdx: integer("chunk_idx").notNull().default(0),
   tableId: text("table_id"),
   rowIdx: integer("row_idx"),
   colIdx: integer("col_idx"),
@@ -227,6 +228,7 @@ export const documentChunks = pgTable("document_chunks", {
   createdAt: timestamp("created_at").defaultNow(),
 }, (table) => ({
   docPageIdx: index("doc_page_idx").on(table.documentId, table.page),
+  sourcePageChunkUnq: unique("source_page_chunk_unq").on(table.sourceHash, table.page, table.chunkIdx),
 }));
 
 export const extractionCandidates = pgTable("extraction_candidates", {
