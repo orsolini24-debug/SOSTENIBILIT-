@@ -1,0 +1,1 @@
+ALTER TABLE "extracted_fields" ADD COLUMN "metadata" jsonb DEFAULT '{}'::jsonb;

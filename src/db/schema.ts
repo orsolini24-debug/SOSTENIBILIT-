@@ -1,4 +1,4 @@
-import { pgTable, text, uuid, integer, timestamp, jsonb, pgEnum, numeric, index } from "drizzle-orm/pg-core";
+import { pgTable, text, uuid, integer, timestamp, jsonb, pgEnum, numeric, index, unique } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 export const datapointStateEnum = pgEnum("datapoint_state", [
@@ -133,7 +133,9 @@ export const datapointValues = pgTable("datapoint_values", {
 
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
-});
+}, (table) => ({
+  projectDpIdx: unique("project_dp_idx").on(table.projectId, table.datapointId),
+}));
 
 export const evidenceLinks = pgTable("evidence_links", {
   id: uuid("id").defaultRandom().primaryKey(),
@@ -207,6 +209,7 @@ export const extractedFields = pgTable("extracted_fields", {
   confidence: text("confidence"), // "Alta", "Media", "Bassa"
   pageReference: integer("page_reference"),
   sourceSnippet: text("source_snippet"),
+  metadata: jsonb("metadata").default({}),
   createdAt: timestamp("created_at").defaultNow(),
 });
 

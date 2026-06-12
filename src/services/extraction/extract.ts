@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { db } from "@/db";
+import { extractionCandidates } from "@/db/schema";
+import { eq } from "drizzle-orm";
 
 // Zod Schema mirroring schemas/candidate.schema.json
 export const CandidateSchema = z.object({
@@ -109,21 +112,40 @@ export interface ExtractionResult {
   candidates: ExtractionCandidate[];
   best_candidate_id: string | null;
   status: "success" | "partial" | "failed";
+  stub?: boolean;
   errors?: string[];
 }
 
 /**
  * Deterministic stub for the extraction API.
- * Currently returns a fixed skeleton based on the document and disclosure.
+ * P0 Fix: Ritorna status failed se non ci sono dati, per evitare falsi positivi.
  */
 export async function extract(documentId: string, disclosureId: string): Promise<ExtractionResult> {
-  // Stub implementation
   const runId = `run_${Date.now()}`;
-  
+
+  // Verifica presenza dati reali
+  const dbCandidates = await db.query.extractionCandidates.findMany({
+    where: eq(extractionCandidates.datapointId, disclosureId),
+    limit: 1
+  });
+
+  if (dbCandidates.length === 0) {
+    return {
+      extraction_run_id: runId,
+      candidates: [],
+      best_candidate_id: null,
+      status: "failed",
+      stub: true,
+      errors: ["ModalitÃ  stub: nessun candidato pre-estratto trovato nel database."]
+    };
+  }
+
   return {
     extraction_run_id: runId,
-    candidates: [],
+    candidates: [], // In una versione reale qui mappiamo dbCandidates
     best_candidate_id: null,
-    status: "success"
+    status: "success",
+    stub: true
   };
 }
+

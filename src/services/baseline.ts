@@ -12,14 +12,19 @@ export async function generateBaseline(projectId: string, companyId: string) {
     throw new Error("Azienda non trovata");
   }
 
-  const employees = companyRecord.employeesCount || 10;
+  // P1 Fix: Rimosso default silenzioso (|| 10, || 500)
+  const employees = companyRecord.employeesCount;
   const industry = companyRecord.industry || "generic";
-  const facilityArea = companyRecord.facilityArea || 500;
+  const facilityArea = companyRecord.facilityArea;
   const isProduction = companyRecord.hasProductionSite === "yes";
   const fleetSize = companyRecord.fleetSize || 0;
   const heatingSource = companyRecord.heatingSource || "gas";
   const renewableElectricity = companyRecord.renewableElectricity === "yes";
   const logisticsIntensity = companyRecord.logisticsIntensity || "low";
+
+  // Determiniamo se i dati base sono presenti
+  const hasEmployees = employees !== null && employees !== undefined;
+  const hasArea = facilityArea !== null && facilityArea !== undefined;
 
   // 2. Regole di stima (Lettura da sector_coefficients DB)
   // Determiniamo il prefisso ATECO (prime due cifre)
@@ -46,65 +51,109 @@ export async function generateBaseline(projectId: string, companyId: string) {
   const waterPerEmployee = getCoeff("water_per_employee", 20);
   const fGasEmissionsRate = getCoeff("fgas_per_100sqm", 0);
 
-  const fGasEmissions = (facilityArea / 100) * fGasEmissionsRate;
-
-  const estimatedEnergy = Math.round((facilityArea * baseKWhPerSqM) + (employees * operationalKWhPerEmployee));
+  // Calcoli stime con gestione dati mancanti
+  const fGasEmissions = hasArea ? (facilityArea! / 100) * fGasEmissionsRate : 0;
+  const estimatedEnergy = (hasArea && hasEmployees) 
+    ? Math.round((facilityArea! * baseKWhPerSqM) + (employees! * operationalKWhPerEmployee))
+    : null;
 
   // -- SCOPE 1 (VSME-B2-S1) Emissioni Dirette --
-  // Veicoli: ~3.5 tCO2e per veicolo commerciale/auto aziendale
-  const fleetEmissions = fleetSize * 3.5; 
-  // Riscaldamento: Se a gas metano, stimiamo ~0.02 tCO2e per mq. Se elettrico, è Scope 2.
-  const heatingEmissions = heatingSource === "gas" ? (facilityArea * 0.02) : 0;
-  const estimatedScope1 = Math.round((fleetEmissions + heatingEmissions + fGasEmissions) * 10) / 10;
+  const fleetEmissions = fleetSize * 3.5;
+  const heatingEmissions = (hasArea && heatingSource === "gas") ? (facilityArea! * 0.02) : 0;
+  const estimatedScope1 = (hasArea || fleetSize > 0)
+    ? Math.round((fleetEmissions + heatingEmissions + fGasEmissions) * 10) / 10
+    : null;
 
   // -- SCOPE 2 (VSME-B2-S2) Emissioni Indirette da Energia Acquistata --
-  // Se l'azienda compra energia 100% rinnovabile (Market-based), le emissioni Scope 2 crollano (idealmente a 0, mettiamo un residuo minimo).
-  // Se no, usiamo il mix nazionale (~0.25 kgCO2/kWh in Italia).
-  const scope2Factor = renewableElectricity ? 0.01 : 0.25; 
-  const estimatedScope2 = Math.round(estimatedEnergy * scope2Factor / 1000 * 100) / 100;
+  const scope2Factor = renewableElectricity ? 0.01 : 0.25;
+  const estimatedScope2 = estimatedEnergy 
+    ? Math.round(estimatedEnergy * scope2Factor / 1000 * 100) / 100
+    : null;
 
   // -- RIFIUTI e ACQUA --
-  const estimatedWaste = Math.round(employees * wastePerEmployee * 10) / 10;
-  const estimatedWater = Math.round(employees * waterPerEmployee);
+  const estimatedWaste = hasEmployees ? Math.round(employees! * wastePerEmployee * 10) / 10 : null;
+  const estimatedWater = hasEmployees ? Math.round(employees! * waterPerEmployee) : null;
 
-  // 3. Mappatura Datapoints
+  // 3. Mappatura Datapoints con Logic "Non determinabile"
   const estimates = [
-    { 
-      dpId: "VSME-B1", 
-      value: estimatedEnergy.toString(), 
-      notes: `Stima profilata da DB (ATECO ${atecoPrefix}): Edificio (${facilityArea} mq) + Operatività (${employees} addetti)` 
+    {
+      dpId: "VSME-B1",
+      value: estimatedEnergy?.toString() || null,
+      state: estimatedEnergy ? "estimated" : "manual_review_required",
+      confidence: estimatedEnergy ? "Bassa" : "Non determinabile",
+      notes: estimatedEnergy 
+        ? `Stima profilata da DB (ATECO ${atecoPrefix}): Edificio (${facilityArea} mq) + Operatività (${employees} addetti)`
+        : `Dati insufficienti (Area: ${facilityArea}, Addetti: ${employees}) per stima energetica.`
+    },
+    {
+      dpId: "VSME-B2-S1",
+      value: estimatedScope1?.toString() || null, 
+      state: estimatedScope1 ? "estimated" : "manual_review_required",
+      confidence: estimatedScope1 ? "Bassa" : "Non determinabile",
+      notes: estimatedScope1
+        ? `Scope 1 stimato: ${fleetSize} veicoli, riscaldamento a ${heatingSource}, più proxy F-Gases industriali.`
+        : `Dati insufficienti per stima Scope 1.`
+    },
+    {
+      dpId: "VSME-B2-S2-LB",
+      value: estimatedEnergy ? Math.round(estimatedEnergy * 0.25 / 1000 * 100) / 100 + "" : null,
+      state: estimatedEnergy ? "estimated" : "manual_review_required",
+      confidence: estimatedEnergy ? "Bassa" : "Non determinabile",
+      notes: `Scope 2 Location-Based stimato sull'energia totale.`
+    },
+    {
+      dpId: "VSME-B2-S2-MB",
+      value: estimatedScope2?.toString() || null,
+      state: estimatedScope2 ? "estimated" : "manual_review_required",
+      confidence: estimatedScope2 ? "Bassa" : "Non determinabile",
+      notes: `Scope 2 Market-Based stimato sull'energia totale. Rinnovabile dichiarata: ${renewableElectricity ? 'Sì' : 'No'}`
     },
     { 
-      dpId: "VSME-B2-S1", 
-      value: estimatedScope1.toString(), 
-      notes: `Scope 1 stimato: ${fleetSize} veicoli, riscaldamento a ${heatingSource}, più proxy F-Gases industriali.` 
+      dpId: "VSME-B3", 
+      value: estimatedWater?.toString() || null, 
+      state: estimatedWater ? "estimated" : "manual_review_required",
+      confidence: estimatedWater ? "Bassa" : "Non determinabile",
+      notes: hasEmployees ? `Stima base idrica per ${employees} dipendenti` : `Dato mancante: Numero dipendenti`
     },
     { 
-      dpId: "VSME-B2-S2-LB", 
-      value: Math.round(estimatedEnergy * 0.25 / 1000 * 100) / 100 + "", 
-      notes: `Scope 2 Location-Based stimato sull'energia totale.` 
+      dpId: "VSME-B4", 
+      value: estimatedWaste?.toString() || null, 
+      state: estimatedWaste ? "estimated" : "manual_review_required",
+      confidence: estimatedWaste ? "Bassa" : "Non determinabile",
+      notes: hasEmployees ? `Stima rifiuti basata su settore e addetti` : `Dato mancante: Numero dipendenti`
     },
     { 
-      dpId: "VSME-B2-S2-MB", 
-      value: estimatedScope2.toString(), 
-      notes: `Scope 2 Market-Based stimato sull'energia totale. Rinnovabile dichiarata: ${renewableElectricity ? 'Sì' : 'No'}` 
-    },
-    { dpId: "VSME-B3", value: estimatedWater.toString(), notes: `Stima base idrica per ${employees} dipendenti` },
-    { dpId: "VSME-B4", value: estimatedWaste.toString(), notes: `Stima rifiuti basata su settore e addetti` },
-    { dpId: "VSME-B5", value: employees.toString(), notes: `Dato anagrafico dichiarato` }
+      dpId: "VSME-B5", 
+      value: employees?.toString() || null, 
+      state: hasEmployees ? "declared_by_company" : "manual_review_required",
+      confidence: hasEmployees ? "Media" : "Non determinabile",
+      notes: hasEmployees ? `Dato anagrafico dichiarato` : `Dato mancante: Numero dipendenti`
+    }
   ];
 
-  // 4. Inserimento nel Database e Tracciamento Audit
+  // 4. Inserimento nel Database e Tracciamento Audit (IDEMPOTENTE)
   for (const est of estimates) {
-    // Inserisci il valore stimato
+    // Inserisci o aggiorna il valore stimato (Idempotenza tramite Upsert)
     const [newValue] = await db.insert(datapointValues).values({
       projectId,
       datapointId: est.dpId,
       value: est.value,
-      state: est.dpId === "VSME-B5" ? "declared_by_company" : "estimated",
-      confidence: est.dpId === "VSME-B5" ? "Media" : "Bassa",
+      state: est.state as any,
+      confidence: est.confidence as any,
       evidenceNotes: est.notes,
-    }).returning();
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: [datapointValues.projectId, datapointValues.datapointId],
+      set: {
+        value: est.value,
+        state: est.state as any,
+        confidence: est.confidence as any,
+        evidenceNotes: est.notes,
+        updatedAt: new Date(),
+      }
+    })
+    .returning();
 
     // Registra l'evento di audit (lineage)
     await db.insert(auditEvents).values({
@@ -114,7 +163,7 @@ export async function generateBaseline(projectId: string, companyId: string) {
       entityId: newValue.id,
       action: "generate_baseline",
       newValue: newValue,
-      metadata: { reason: "Database-driven rule estimation", atecoPrefix }
+      metadata: { reason: "Database-driven rule estimation", atecoPrefix, version: "v1.1-integrity" }
     });
   }
 

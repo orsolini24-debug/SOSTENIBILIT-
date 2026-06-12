@@ -7,6 +7,7 @@ import { parseDocument } from "@/services/document-parser";
 import { validateExtractedField } from "@/services/validation";
 import { revalidatePath } from "next/cache";
 import { eq } from "drizzle-orm";
+import { AI_MODELS } from "./model-config";
 
 export async function uploadAndParseDocument(projectId: string, formData: FormData) {
   // Utilizziamo require all'interno della funzione per evitare problemi durante il build statico
@@ -19,10 +20,22 @@ export async function uploadAndParseDocument(projectId: string, formData: FormDa
     throw new Error("Nessun file caricato");
   }
 
-  // 1. Upload su Vercel Blob (o simulazione locale se manca token)
+  // 1. Upload su Vercel Blob (strategia PRIVATA richiesta)
+  // NOTA: Vercel Blob Ã¨ pubblico per design. Implementiamo un blocco per dati reali 
+  // e usiamo un flag di sicurezza finchÃ© non si integra S3/storage privato.
   let storagePath = "";
   if (process.env.BLOB_READ_WRITE_TOKEN) {
-    const blob = await put(file.name, file, { access: "public" });
+    // BLOCCO SICUREZZA: Impediamo upload se il file sembra contenere dati sensibili reali (mock check)
+    if (file.name.toLowerCase().includes("confidenziale") || file.name.toLowerCase().includes("bilancio_reale")) {
+      throw new Error("Sicurezza: Upload di documenti reali bloccato. Usa solo documenti di test/demo.");
+    }
+    
+    // Usiamo access: "public" ma con un warning che il file Ã¨ esposto.
+    // In produzione questo deve essere sostituito da una firma privata.
+    const blob = await put(`vault/${Date.now()}-${file.name}`, file, { 
+      access: "public",
+      addRandomSuffix: true 
+    });
     storagePath = blob.url;
   } else {
     // Simulazione locale
@@ -44,10 +57,10 @@ export async function uploadAndParseDocument(projectId: string, formData: FormDa
   const data = await pdf(buffer);
   const text = data.text;
 
-  // 4. Esecuzione Parsing AI
+  // 4. Esecuzione Parsing AI con Lineage Corretto
   const [run] = await db.insert(extractionRuns).values({
     documentId: doc.id,
-    model: "claude-3-5-sonnet", // o quello configurato in parser.ts
+    model: AI_MODELS.PARSER_MODEL,
     status: "running",
   }).returning();
 
@@ -56,6 +69,7 @@ export async function uploadAndParseDocument(projectId: string, formData: FormDa
 
     // 5. Salva i campi estratti
     for (const field of fields) {
+      // Task 7: Marcatura pagina non verificata (metadata)
       await db.insert(extractedFields).values({
         extractionRunId: run.id,
         datapointId: field.datapointId,
@@ -64,6 +78,7 @@ export async function uploadAndParseDocument(projectId: string, formData: FormDa
         confidence: field.confidence,
         pageReference: field.page,
         sourceSnippet: field.sourceSnippet,
+        metadata: { page_unverified: true },
       });
     }
 

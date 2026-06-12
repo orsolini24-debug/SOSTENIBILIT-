@@ -86,13 +86,17 @@ export async function validateExtractedField(
     }
   }
 
-  // 5. Promozione del datapoint a "manually_validated"
+  // 5. Promozione del datapoint
+  // P0 Fix: Se c'Ã¨ un'anomalia, lo stato deve essere "manual_review_required" e la confidenza Bassa.
+  const targetState = anomaly ? "manual_review_required" : "manually_validated";
+  const targetConfidence = anomaly ? "Bassa" : "Alta";
+
   const [newValue] = await db
     .update(datapointValues)
     .set({
       value: field.value,
-      state: "manually_validated",
-      confidence: "Alta",
+      state: targetState,
+      confidence: targetConfidence,
       sourceDocumentId: documentId,
       updatedAt: new Date(),
     })
@@ -112,10 +116,10 @@ export async function validateExtractedField(
   await db.insert(validationEvents).values({
     datapointValueId: newValue.id,
     userId,
-    action: "approved",
+    action: anomaly ? "flagged_anomaly" : "approved",
     previousState: oldValue.state,
-    newState: "manually_validated",
-    reason: "Approvazione utente dopo estrazione documentale",
+    newState: targetState,
+    reason: anomaly ? `Anomalia rilevata: ${anomaly}` : "Approvazione utente dopo estrazione documentale",
   });
 
   // 8. Audit trail immutabile

@@ -29,6 +29,20 @@
       "when": 1781195573712,
       "tag": "0003_yummy_shadow_king",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1781246873328,
+      "tag": "0004_good_sumo",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1781269123930,
+      "tag": "0005_unusual_network",
+      "breakpoints": true
     }
   ]
 }

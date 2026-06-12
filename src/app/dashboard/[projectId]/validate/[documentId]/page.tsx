@@ -112,7 +112,13 @@ export default async function ValidationPage({
                 </div>
 
                 <div className="bg-slate-100 p-3 rounded-md text-sm font-mono text-slate-600">
-                  <span className="font-semibold block mb-1">Snippet dal documento (Pagina {field.pageReference}):</span>
+                  <span className="font-semibold block mb-1">
+                    Snippet dal documento (Pagina {field.pageReference}
+                    {field.metadata && (field.metadata as any).page_unverified && (
+                      <span className="text-orange-500 ml-1 text-xs uppercase border border-orange-500 rounded px-1">Indicativa, non verificata</span>
+                    )}
+                    ):
+                  </span>
                   "{field.sourceSnippet}"
                 </div>
 

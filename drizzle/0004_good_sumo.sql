@@ -1,0 +1,1 @@
+ALTER TABLE "datapoint_values" ADD CONSTRAINT "project_dp_idx" UNIQUE("project_id","datapoint_id");

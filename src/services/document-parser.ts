@@ -2,6 +2,8 @@ import { generateObject } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 
+import { AI_MODELS } from "@/lib/model-config";
+
 export interface ExtractedField {
   datapointId: string;
   field: string;
@@ -14,7 +16,7 @@ export interface ExtractedField {
 }
 
 export async function parseDocument(documentText: string, documentType: "bolletta" | "hr" | "rifiuti"): Promise<ExtractedField[]> {
-  console.log(`Avvio parsing reale per documento tipo: ${documentType}`);
+  console.log(`Avvio parsing reale per documento tipo: ${documentType} con modello ${AI_MODELS.SDK_PARSER_ID}`);
 
   // Se manca la chiave usiamo il mock (Fallback per sviluppo locale)
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -33,10 +35,11 @@ export async function parseDocument(documentText: string, documentType: "bollett
      }
      return [];
   }
-  
+
   const { object } = await generateObject({
-    model: anthropic('claude-sonnet-4-6'),
+    model: anthropic(AI_MODELS.SDK_PARSER_ID),
     schema: z.object({
+
       extracted_fields: z.array(
         z.object({
           datapointId: z.string().describe("ID del datapoint VSME (es. VSME-B1)"),
