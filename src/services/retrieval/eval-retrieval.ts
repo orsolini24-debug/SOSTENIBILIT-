@@ -33,7 +33,8 @@ export async function evaluateRetrieval() {
   const docCache = new Map<string, string>();
 
   for (const row of gtData) {
-    if (row.validation_status !== "verified" && row.validation_status !== "rebuilt") {
+    // GT v2 CSV uses column "status", not "validation_status"
+    if (row.status !== "verified" && row.status !== "rebuilt") {
       continue;
     }
     
@@ -117,5 +118,4 @@ ${failureCases.length === 0 ? "Nessun fallimento nei top 10." :
 
 // Esecuzione stand-alone
 if (require.main === module) {
-  evaluateRetrieval().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });
-}
+  evaluateRetrieval().then(() => process.exit(0)).catch(e => { c
