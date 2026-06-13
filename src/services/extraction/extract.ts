@@ -6,6 +6,7 @@ import { retrieveChunks } from "../retrieval/retrieve";
 import { generateObject } from "ai";
 import { anthropic } from "@ai-sdk/anthropic";
 import { AI_MODELS } from "@/lib/model-config";
+import crypto from "crypto";
 
 // Zod Schema mirroring schemas/candidate.schema.json
 export const CandidateSchema = z.object({
@@ -121,7 +122,7 @@ export interface ExtractionResult {
 }
 
 export async function extract(documentId: string, disclosureId: string, runId?: string): Promise<ExtractionResult> {
-  const extractionRunId = runId || `run_${Date.now()}`;
+  const extractionRunId = runId || crypto.randomUUID();
   
   // 1. Retrieval
   const chunks = await retrieveChunks(documentId, disclosureId, 5);
@@ -161,22 +162,25 @@ export async function extract(documentId: string, disclosureId: string, runId?: 
             raw_value: z.string(),
             normalized_value: z.number().nullable(),
             unit_raw: z.string(),
-            year: z.number(),
+            year: z.number().nullable(),
             evidence_text: z.string(),
             chunk_id: z.string(),
             confidence_score: z.number() // 0-1
-         }))
-      }),
-      prompt: `
-        Estrai i candidati per la metrica ${disclosureId} dai seguenti frammenti di testo.
-        Devi restituire il valore esatto (raw_value), un valore numerico normalizzato (se applicabile),
-        l'unita di misura trovata, l'anno di riferimento (se esplicito, altrimenti 2024 come fallback plausibile, ma segnalalo),
-        la frase esatta di evidenza e il CHUNK_ID da cui hai preso l'informazione.
+            }))
+            }),
+            prompt: `
+            Estrai i candidati per la metrica ${disclosureId} dai seguenti frammenti di testo.
+            Devi restituire il valore esatto (raw_value), un valore numerico normalizzato (se applicabile),
+            l'unita di misura trovata, l'anno di riferimento, la frase esatta di evidenza e il CHUNK_ID.
 
-        CONTESTO:
-        ${contextText}
-      `
-    });
+            REGOLE RIGOROSE:
+            1. ANNO: Se l'anno non e esplicitamente citato nel testo o facilmente deducibile dal contesto immediato, restituisci null. NON inventarlo e non assumere 2024 di default.
+            2. ANTI-TRAPPOLA: Non estrarre MAI target/obiettivi futuri, valori storici di baseline (es. 2018, 2020 usati per confronto) o metriche di intensita (es. kWh per dipendente, tonnellate per milione di fatturato) a meno che non sia esplicitamente richiesto dalla metrica. Cerca solo il valore assoluto corrente.
+
+            CONTESTO:
+            ${contextText}
+            `
+            });
     object = response.object;
   }
 
@@ -200,19 +204,23 @@ export async function extract(documentId: string, disclosureId: string, runId?: 
      
      // TS-Light Validation
      const rejectionFlags: string[] = [];
-     if (cand.year !== 2024 && cand.year !== 2023) {
+     const derivedYear = cand.year ?? 2024; // Fallback di sistema se LLM restituisce null
+     if (derivedYear !== 2024 && derivedYear !== 2023) {
         rejectionFlags.push("wrong_year_risk");
      }
      
      const doc = await db.query.documents.findFirst({ where: eq(documents.id, documentId) });
      
+     // T1: Real evidence_hash
+     const evidenceHash = crypto.createHash("sha256").update(cand.evidence_text).digest("hex");
+
      const fullCandidate: ExtractionCandidate = {
         candidate_id: `cand_${Date.now()}_${i}`,
         extraction_run_id: extractionRunId,
         company_id: "unknown",
         document_id: documentId,
         source_document_id: documentId,
-        document_year: cand.year,
+        document_year: derivedYear,
         source_file: doc?.name || "unknown",
         disclosure_id: disclosureId,
         normalized_value: cand.normalized_value,
@@ -220,7 +228,7 @@ export async function extract(documentId: string, disclosureId: string, runId?: 
         raw_value: cand.raw_value,
         unit_raw: cand.unit_raw,
         period: "FY",
-        year: cand.year,
+        year: derivedYear,
         page_number: chunk.page,
         page: chunk.page, // LA PAGINA E' PRESA DAL CHUNK!
         table_coordinates: null,
@@ -235,7 +243,7 @@ export async function extract(documentId: string, disclosureId: string, runId?: 
           evidence_id: `ev_${Date.now()}_${i}`,
           page_number: chunk.page,
           text_snippet: cand.evidence_text,
-          evidence_hash: "mock_hash"
+          evidence_hash: evidenceHash
         },
         retrieval: {
           retrieval_strategy: "hybrid",

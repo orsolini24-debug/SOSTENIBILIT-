@@ -13,14 +13,14 @@ export interface RetrievedChunk {
 
 // Sinonimi espansi per disclosure (Query Template)
 const DISCLOSURE_TEMPLATES: Record<string, string[]> = {
-  "VSME-B1": ["energia", "consumo elettrico", "consumo totale di energia", "total energy consumption", "elettricita", "kwh", "mwh"],
-  "VSME-B2-S1": ["scope 1", "emissioni dirette", "ghg", "gas serra", "co2", "riscaldamento", "flotta", "veicoli"],
-  "VSME-B2-S2": ["scope 2", "emissioni indirette", "location based", "market based", "energia acquistata"],
-  "VSME-B2-S2-LB": ["scope 2", "emissioni indirette", "location based", "energia acquistata"],
-  "VSME-B2-S2-MB": ["scope 2", "emissioni indirette", "market based", "energia acquistata"],
-  "VSME-B3": ["acqua", "prelievo idrico", "consumo idrico", "water withdrawal", "m3", "litri"],
-  "VSME-B4": ["rifiuti", "waste", "tonnellate", "kg", "pericolosi", "smaltimento"],
-  "VSME-B5": ["dipendenti", "addetti", "personale", "risorse umane", "hr", "headcount", "employees"]
+  "total_energy_consumption": ["energia", "consumo elettrico", "consumo totale di energia", "total energy consumption", "elettricita", "kwh", "mwh"],
+  "scope_1_ghg_emissions": ["scope 1", "emissioni dirette", "ghg", "gas serra", "co2", "riscaldamento", "flotta", "veicoli"],
+  "scope_2_location_based_ghg_emissions": ["scope 2", "emissioni indirette", "location based", "energia acquistata"],
+  "scope_2_market_based_ghg_emissions": ["scope 2", "emissioni indirette", "market based", "energia acquistata"],
+  "scope_3_total_ghg_emissions": ["scope 3", "catena del valore", "value chain", "altre emissioni indirette"],
+  "total_water_withdrawal": ["acqua", "prelievo idrico", "consumo idrico", "water withdrawal", "m3", "litri"],
+  "total_waste_generated": ["rifiuti", "waste", "tonnellate", "kg", "pericolosi", "smaltimento"],
+  "employees": ["dipendenti", "addetti", "personale", "risorse umane", "hr", "headcount", "employees"]
 };
 
 export async function retrieveChunks(documentId: string, disclosureId: string, topK: number = 5): Promise<RetrievedChunk[]> {

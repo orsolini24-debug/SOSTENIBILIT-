@@ -118,4 +118,5 @@ ${failureCases.length === 0 ? "Nessun fallimento nei top 10." :
 
 // Esecuzione stand-alone
 if (require.main === module) {
-  evaluateRetrieval().then(() => process.exit(0)).catch(e => { c
+  evaluateRetrieval().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });
+}
