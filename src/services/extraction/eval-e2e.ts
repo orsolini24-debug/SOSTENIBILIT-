@@ -120,6 +120,7 @@ export async function runE2EEval(batchSize: number = 999) {
       done.set(disclosureId + "|" + sourceFile, entry);
       console.log("  -> " + (isMatch ? "OK" : "FAIL") + " exp=" + expectedValue + " act=" + entry.actualValue);
       processed++;
+      await new Promise(r => setTimeout(r, 2500)); // rate limit Groq: 30 RPM
     } catch (e) {
       console.error("  ERROR: " + String(e).substring(0, 100));
       const entry = {
@@ -130,6 +131,7 @@ export async function runE2EEval(batchSize: number = 999) {
       await fs.appendFile(PROGRESS_FILE, JSON.stringify(entry) + "\n");
       done.set(disclosureId + "|" + sourceFile, entry);
       processed++;
+      await new Promise(r => setTimeout(r, 2500)); // rate limit Groq
     }
   }
 
