@@ -1,10 +1,9 @@
 import { z } from "zod";
 import { db } from "@/db";
-import { extractionCandidates, documentChunks, documents } from "@/db/schema";
+import { extractionCandidates, extractionRuns, documentChunks, documents } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { retrieveChunks } from "../retrieval/retrieve";
 import { generateObject } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
 import { AI_MODELS } from "@/lib/model-config";
 import crypto from "crypto";
 
@@ -123,10 +122,23 @@ export interface ExtractionResult {
 
 export async function extract(documentId: string, disclosureId: string, runId?: string): Promise<ExtractionResult> {
   const extractionRunId = runId || crypto.randomUUID();
-  
+
+  // 0. Crea il record extraction_run (FK richiesta da extraction_candidates)
+  //    Se runId è stato passato dall'esterno, il chiamante è responsabile del record.
+  if (!runId) {
+    await db.insert(extractionRuns).values({
+      id: extractionRunId,
+      documentId: documentId,
+      model: AI_MODELS.PARSER_MODEL_NAME,
+      promptVersion: "v8.0",
+      status: "running",
+    });
+  }
+
   // 1. Retrieval
-  const chunks = await retrieveChunks(documentId, disclosureId, 5);
-  
+  const chunks = await retrieveChunks(documentId, disclosureId, 10);
+  console.log(`  [RETRIEVAL] doc=${documentId} disc=${disclosureId} → ${chunks.length} chunks`);
+
   if (chunks.length === 0) {
     return {
       extraction_run_id: extractionRunId,
@@ -140,8 +152,9 @@ export async function extract(documentId: string, disclosureId: string, runId?: 
   // 2. Chiamata LLM
   // Fallback per mancanza di chiave (mock)
   let object: any;
-  if (!process.env.ANTHROPIC_API_KEY) {
-     console.log("Chiave ANTHROPIC_API_KEY mancante. Uso LLM mock.");
+  const hasApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.ANTHROPIC_API_KEY;
+  if (!hasApiKey) {
+     console.log("Nessuna chiave API trovata. Uso LLM mock.");
      object = {
        candidates: [{
          raw_value: "45000",
@@ -156,7 +169,7 @@ export async function extract(documentId: string, disclosureId: string, runId?: 
   } else {
     const contextText = chunks.map(c => `[CHUNK_ID: ${c.chunk_id} | PAGE: ${c.page}]\\n${c.text}`).join("\\n\\n");
     const response = await generateObject({
-      model: anthropic(AI_MODELS.PARSER_MODEL),
+      model: AI_MODELS.PARSER_MODEL,
       schema: z.object({
          candidates: z.array(z.object({
             raw_value: z.string(),
@@ -283,8 +296,8 @@ export async function extract(documentId: string, disclosureId: string, runId?: 
         lineage_hash: `hash_${Date.now()}_${i}`,
         version: "1.0",
         prompt_version: "1.0",
-        model_name: AI_MODELS.PARSER_MODEL,
-        model_version: AI_MODELS.PARSER_MODEL,
+        model_name: AI_MODELS.PARSER_MODEL_NAME,
+        model_version: AI_MODELS.PARSER_MODEL_NAME,
         temperature: 0,
         schema_version: "1.0",
         validator_version: "ts-light-v1",
@@ -295,23 +308,34 @@ export async function extract(documentId: string, disclosureId: string, runId?: 
      resultCandidates.push(fullCandidate);
      
      // Salvataggio nel DB (tabella canonical extractionCandidates)
+     // datapointId è null se il disclosure_id non è ancora presente nella tabella datapoints
+     // (i GT usano IDs come "scope_2_location_based_ghg_emissions", il seed usa "VSME-B2-S2")
+     // Il disclosure_id reale è conservato nel campo metadata.disclosure_id
      await db.insert(extractionCandidates).values({
         extractionRunId: extractionRunId,
-        datapointId: disclosureId,
+        datapointId: null,
         rawValue: fullCandidate.raw_value,
         normalizedValue: fullCandidate.normalized_value?.toString(),
         unitRaw: fullCandidate.unit_raw,
         unitNormalized: fullCandidate.unit_normalized,
-        confidence: fullCandidate.confidence > 0.8 ? "Alta" : "Media", // conversione semplificata
+        confidence: fullCandidate.confidence > 0.8 ? "Alta" : "Media",
         pageReference: fullCandidate.page,
         evidenceText: fullCandidate.evidence_text,
         metadata: {
            candidate_id: fullCandidate.candidate_id,
+           disclosure_id: disclosureId,
            model: fullCandidate.model_name,
            validator_version: fullCandidate.validator_version,
            rejection_flags: fullCandidate.validation.rejection_flags
         }
      });
+  }
+
+  // Aggiorna status del run a "completed"
+  if (!runId) {
+    await db.update(extractionRuns)
+      .set({ status: "completed" })
+      .where(eq(extractionRuns.id, extractionRunId));
   }
 
   return {
