@@ -4,153 +4,158 @@ import * as path from "path";
 import { parse } from "csv-parse/sync";
 import { extract } from "./extract";
 import { db } from "@/db";
-import { documents, documentChunks } from "@/db/schema";
-import { sql, count } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 
 const GT_FILE = path.resolve(__dirname, "../../../../eval/ground_truth_v2.csv");
 const TODAY = new Date().toISOString().slice(0, 10);
-const OUTPUT_FILE = path.resolve(__dirname, `../../../../eval/extract_e2e_${TODAY}.md`);
+const OUTPUT_FILE = path.resolve(__dirname, "../../../../eval/extract_e2e_" + TODAY + ".md");
+const PROGRESS_FILE = path.resolve(__dirname, "../../../../eval/extract_e2e_" + TODAY + "_progress.jsonl");
 
-export async function runE2EEval() {
-  console.log("Inizio E2E Measurement su GT v2...");
+export async function runE2EEval(batchSize: number = 999) {
+  console.log("E2E Measurement su GT v2 (batchSize=" + batchSize + ")...");
 
   const hasApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.ANTHROPIC_API_KEY;
-  if (!hasApiKey) {
-    console.error("ERRORE: nessuna chiave API trovata nel file .env.");
-    console.error("  Aggiungi GOOGLE_GENERATIVE_AI_API_KEY (Gemini, gratuito) oppure ANTHROPIC_API_KEY.");
-    process.exit(1);
-  }
+  if (!hasApiKey) { console.error("ERRORE: nessuna chiave API."); process.exit(1); }
 
   let gtData: any[];
   try {
     const csvContent = await fs.readFile(GT_FILE, "utf-8");
     gtData = parse(csvContent, { columns: true, skip_empty_lines: true });
-  } catch (e) {
-    console.error(`Impossibile leggere Ground Truth da ${GT_FILE}.`);
-    return;
-  }
+  } catch (e) { console.error("Cannot read GT: " + GT_FILE); return; }
 
-  const validRows = gtData.filter(r => r.status === "verified" || r.status === "rebuilt");
-  
-  if (validRows.length < 5) {
-    console.warn(`Trovate solo ${validRows.length} righe valide. L'istruzione richiedeva >= 5.`);
-  }
+  const validRows = gtData.filter((r: any) => r.status === "verified" || r.status === "rebuilt");
+  console.log("Righe GT valide: " + validRows.length);
 
-  const results: any[] = [];
+  // Carica progress esistente (resume support)
+  const done = new Map<string, any>();
+  try {
+    const lines = (await fs.readFile(PROGRESS_FILE, "utf-8")).trim().split("\n").filter(Boolean);
+    for (const line of lines) {
+      const e = JSON.parse(line);
+      done.set(e.disclosureId + "|" + e.sourceFile, e);
+    }
+    console.log("Gia processate: " + done.size + "/" + validRows.length);
+  } catch { await fs.writeFile(PROGRESS_FILE, ""); }
+
+  const remaining = validRows.filter((r: any) => {
+    const prev = done.get(r.disclosure_id + "|" + r.source_file);
+    return !prev || prev.status === "Exception"; // retry Exception rows
+  });
+  console.log("Da processare ora: " + Math.min(batchSize, remaining.length) + " (di " + remaining.length + " rimanenti)");
+
   const docCache = new Map<string, string>();
+  let processed = 0;
 
-  for (const row of validRows) {
-    const sourceFile = row.source_file;
-    const disclosureId = row.disclosure_id;
-    const expectedValue = row.expected_value;
-    const expectedPage = parseInt(row.page_number, 10);
-    const expectedYear = parseInt(row.year, 10) || 2024;
+  function normalizeNum(v: any): number | null {
+    if (v == null || v === "N/A") return null;
+    const s = String(v).trim().replace(/[€$£]/g,"").replace(/\s/g,"").replace(/[a-zA-Z%°\/]+.*$/,"");
+    const normalized = s
+      .replace(/\.(?=\d{3}(?:[.,]|$))/g, "")
+      .replace(/,(?=\d{3}(?:[.,]|$))/g, "")
+      .replace(",", ".");
+    const n = parseFloat(normalized);
+    return isNaN(n) ? null : n;
+  }
+
+  for (const row of remaining) {
+    if (processed >= batchSize) break;
+    const sourceFile: string = row.source_file;
+    const disclosureId: string = row.disclosure_id;
+    const expectedValue: string = row.expected_value;
+    const expectedPage: number = parseInt(row.page_number, 10);
+    const expectedYear: number = parseInt(row.year, 10) || 2024;
 
     let documentId = docCache.get(sourceFile);
     if (!documentId) {
-       // Cerca il documento con più chunks (ci sono duplicati con 0 chunks nel DB)
-       const rows = await db.execute(sql`
-         SELECT d.id, d.name, COUNT(dc.id)::int as chunk_count
-         FROM documents d
-         LEFT JOIN document_chunks dc ON dc.document_id = d.id
-         WHERE d.name ILIKE ${'%' + sourceFile.replace(/\.pdf$/i,'') + '%'}
-         GROUP BY d.id, d.name
-         ORDER BY chunk_count DESC
-         LIMIT 1
-       `);
-       const match = (rows as any).rows?.[0] ?? rows[0];
-       if (match && Number(match.chunk_count) > 0) {
-         documentId = match.id as string;
-         docCache.set(sourceFile, documentId);
-         console.log(`  [DOC] ${sourceFile} → id=${documentId} chunks=${match.chunk_count}`);
-       }
+      // 1. Try exact match first (case-insensitive) to avoid stem collision
+      //    e.g. "report_2024_ita" stem matches AQUAFIL_SUST-REPORT_2024_ITA incorrectly
+      const exactRows = await db.execute(sql`
+        SELECT d.id, d.name, COUNT(dc.id)::int as chunk_count
+        FROM documents d LEFT JOIN document_chunks dc ON dc.document_id = d.id
+        WHERE LOWER(d.name) = LOWER(${sourceFile})
+        GROUP BY d.id, d.name ORDER BY chunk_count DESC LIMIT 1
+      `);
+      const exactMatch = (exactRows as any).rows?.[0] ?? (exactRows as any)[0];
+      if (exactMatch && Number(exactMatch.chunk_count) > 0) {
+        documentId = exactMatch.id as string;
+        console.log("  [DOC] exact match: " + exactMatch.name + " (" + exactMatch.chunk_count + " chunks)");
+      } else {
+        // 2. Fallback to stem ILIKE (handles name truncation / slight variations)
+        const stem = sourceFile.replace(/\.pdf$/i, "").substring(0, 20);
+        const stemRows = await db.execute(sql`
+          SELECT d.id, d.name, COUNT(dc.id)::int as chunk_count
+          FROM documents d LEFT JOIN document_chunks dc ON dc.document_id = d.id
+          WHERE d.name ILIKE ${"%" + stem + "%"}
+          GROUP BY d.id, d.name ORDER BY chunk_count DESC LIMIT 1
+        `);
+        const stemMatch = (stemRows as any).rows?.[0] ?? (stemRows as any)[0];
+        if (stemMatch && Number(stemMatch.chunk_count) > 0) {
+          documentId = stemMatch.id as string;
+          console.log("  [DOC] stem fallback: " + stemMatch.name + " (" + stemMatch.chunk_count + " chunks)");
+        }
+      }
+      if (documentId) docCache.set(sourceFile, documentId);
     }
+    if (!documentId) { console.warn("MISSING DOC: " + sourceFile); continue; }
 
-    if (!documentId) {
-      console.warn(`Documento non trovato nel DB: ${sourceFile}`);
-      continue;
-    }
-
-    console.log(`Esecuzione extract per ${disclosureId} su ${sourceFile}...`);
-    
+    console.log("[" + (done.size + processed + 1) + "/" + validRows.length + "] " + disclosureId + " / " + sourceFile.substring(0, 30));
     try {
       const extResult = await extract(documentId, disclosureId);
-      
       const best = extResult.candidates.length > 0 ? extResult.candidates[0] : null;
-
-      // Normalizza numero: rimuove separatori migliaia (. o ,) e converte virgola decimale in punto
-      function normalizeNum(v: any): number | null {
-        if (v == null || v === "N/A") return null;
-        const s = String(v).trim()
-          .replace(/[€$£]/g, "")
-          .replace(/\s/g, "");
-        // Distingui decimale da migliaia: se l'ultimo separatore è , o . con 1-2 cifre dopo → decimale
-        // Altrimenti → migliaia
-        const normalized = s
-          .replace(/\.(?=\d{3}(?:[.,]|$))/g, "")  // rimuovi . come migliaia (es. 91.347 → 91347)
-          .replace(/,(?=\d{3}(?:[.,]|$))/g, "")    // rimuovi , come migliaia (es. 91,347 → 91347)
-          .replace(",", ".");                         // converti virgola decimale
-        const n = parseFloat(normalized);
-        return isNaN(n) ? null : n;
-      }
-
       const expNum = normalizeNum(expectedValue);
       const actNum = normalizeNum(best?.raw_value);
       const valueMatch = expNum !== null && actNum !== null && Math.abs(expNum - actNum) / Math.max(Math.abs(expNum), 1) < 0.01;
       const pageMatch = best ? (best.page === expectedPage || Math.abs(best.page - expectedPage) <= 1) : false;
       const yearMatch = best ? (best.year === expectedYear) : false;
-
-      results.push({
-        disclosureId,
-        sourceFile,
-        expectedValue,
-        expectedPage,
-        expectedYear,
+      const isMatch = best != null && valueMatch && pageMatch && yearMatch;
+      const entry = {
+        disclosureId, sourceFile, expectedValue, expectedPage, expectedYear,
         actualValue: best ? best.raw_value : "N/A",
         actualPage: best ? best.page : "N/A",
         actualYear: best ? best.year : "N/A",
-        status: best ? "Extracted" : "Failed (No candidates)",
-        match: best != null && valueMatch && pageMatch && yearMatch
-      });
+        status: best ? "Extracted" : "No candidates",
+        match: isMatch
+      };
+      await fs.appendFile(PROGRESS_FILE, JSON.stringify(entry) + "\n");
+      done.set(disclosureId + "|" + sourceFile, entry);
+      console.log("  -> " + (isMatch ? "OK" : "FAIL") + " exp=" + expectedValue + " act=" + entry.actualValue);
+      processed++;
     } catch (e) {
-      console.error(`Errore in extract per ${disclosureId}:`, e);
-      results.push({
-        disclosureId,
-        sourceFile,
-        expectedValue,
-        expectedPage,
-        expectedYear,
-        actualValue: "ERROR",
-        actualPage: "ERROR",
-        actualYear: "ERROR",
-        status: "Exception",
-        match: false
-      });
+      console.error("  ERROR: " + String(e).substring(0, 100));
+      const entry = {
+        disclosureId, sourceFile, expectedValue, expectedPage, expectedYear,
+        actualValue: "ERROR", actualPage: "ERROR", actualYear: "ERROR",
+        status: "Exception", match: false
+      };
+      await fs.appendFile(PROGRESS_FILE, JSON.stringify(entry) + "\n");
+      done.set(disclosureId + "|" + sourceFile, entry);
+      processed++;
     }
   }
 
-  const matches = results.filter(r => r.match).length;
-  const total = results.length;
-  
-  const markdown = `# Phase 8 - E2E Extraction Evaluation
-  
-## Metriche Globali
-- **Total Tested**: ${total}
-- **Perfect Matches (Value, Page, Year)**: ${matches} (${total > 0 ? ((matches/total)*100).toFixed(2) : 0}%)
-
-## Tabella Onesta dei Risultati
-
-| Disclosure | Source File | Expected (Val, Pag, Anno) | Actual (Val, Pag, Anno) | Status | Match |
-|---|---|---|---|---|---|
-${results.map(r => `| ${r.disclosureId} | ${r.sourceFile} | ${r.expectedValue}, p.${r.expectedPage}, ${r.expectedYear} | ${r.actualValue}, p.${r.actualPage}, ${r.actualYear} | ${r.status} | ${r.match ? '✅' : '❌'} |`).join('\n')}
-
-*Generato automaticamente da eval-e2e.ts*
-`;
-
-  await fs.writeFile(OUTPUT_FILE, markdown);
-  console.log(`E2E Evaluation completata. Risultati in ${OUTPUT_FILE}`);
+  // Rigenera report markdown da tutto il progress
+  const allResults = Array.from(done.values());
+  const matches = allResults.filter((r: any) => r.match).length;
+  const total = allResults.length;
+  const pct = total > 0 ? ((matches / total) * 100).toFixed(2) : "0";
+  const tableRows = allResults.map((r: any) => {
+    return "| " + r.disclosureId + " | " + r.sourceFile + " | " + r.expectedValue + ", p." + r.expectedPage + ", " + r.expectedYear +
+      " | " + r.actualValue + ", p." + r.actualPage + ", " + r.actualYear + " | " + r.status + " | " + (r.match ? "OK" : "FAIL") + " |";
+  }).join("\n");
+  const md =
+    "# Phase 8 - E2E Extraction Evaluation\n\n" +
+    "## Metriche (" + total + "/" + validRows.length + " completate)\n" +
+    "- **Perfect Matches**: " + matches + " (" + pct + "%)\n\n" +
+    "## Risultati\n\n" +
+    "| Disclosure | Source File | Expected | Actual | Status | Match |\n" +
+    "|---|---|---|---|---|---|\n" +
+    tableRows + "\n\n*Generato da eval-e2e.ts*\n";
+  await fs.writeFile(OUTPUT_FILE, md);
+  console.log("Salvato: " + OUTPUT_FILE);
+  console.log("STATO: " + total + "/" + validRows.length + " righe processate, " + matches + " match (" + pct + "%)");
 }
 
 if (require.main === module) {
-  runE2EEval().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });
+  const batchSize = parseInt(process.env.EVAL_BATCH || "3", 10);
+  runE2EEval(batchSize).then(() => process.exit(0)).catch((e) => { console.error(e); process.exit(1); });
 }

@@ -189,6 +189,9 @@ export async function extract(documentId: string, disclosureId: string, runId?: 
             REGOLE RIGOROSE:
             1. ANNO: Se l'anno non e esplicitamente citato nel testo o facilmente deducibile dal contesto immediato, restituisci null. NON inventarlo e non assumere 2024 di default.
             2. ANTI-TRAPPOLA: Non estrarre MAI target/obiettivi futuri, valori storici di baseline (es. 2018, 2020 usati per confronto) o metriche di intensita (es. kWh per dipendente, tonnellate per milione di fatturato) a meno che non sia esplicitamente richiesto dalla metrica. Cerca solo il valore assoluto corrente.
+            3. SCOPE SPECIFICITY: Per metriche di tipo "scope_1", estrai SOLO il valore con etichetta esplicita "Scope 1", "GHG Scope 1" o "Emissioni Scope 1". NON estrarre MAI aggregati come "Scope 1+2", "Scope 1+2+3", "Total GHG", "Totale emissioni GES", "GHG totali". Se una tabella ha piu righe, leggi le label con cura e scegli SOLO la riga Scope 1. Per "scope_2_market_based", estrai solo il valore esplicitamente etichettato "market-based" o "mercato", non il location-based.
+            4. TABELLE FRAMMENTATE: I PDF dividono spesso le tabelle in chunk separati con header e valori distinti. Se un chunk contiene solo numeri senza label, cerca la label nel testo circostante degli altri chunk con lo stesso PAGE. NON estrarre numeri orfani privi di etichetta identificativa chiara.
+            5. VALORE RAW: Restituisci il valore ESATTAMENTE come appare nel documento (es. "37.903" se il doc usa il punto come separatore migliaia, "27.106 MWh" se accompagnato da unita). Non convertire unita, non ricalcolare.
 
             CONTESTO:
             ${contextText}
@@ -345,4 +348,3 @@ export async function extract(documentId: string, disclosureId: string, runId?: 
     status: "success"
   };
 }
-
