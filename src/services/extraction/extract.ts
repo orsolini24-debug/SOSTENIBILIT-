@@ -152,7 +152,7 @@ export async function extract(documentId: string, disclosureId: string, runId?: 
   // 2. Chiamata LLM
   // Fallback per mancanza di chiave (mock)
   let object: any;
-  const hasApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.ANTHROPIC_API_KEY;
+  const hasApiKey = process.env.GROQ_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.ANTHROPIC_API_KEY;
   if (!hasApiKey) {
      console.log("Nessuna chiave API trovata. Uso LLM mock.");
      object = {
@@ -170,6 +170,7 @@ export async function extract(documentId: string, disclosureId: string, runId?: 
     const contextText = chunks.map(c => `[CHUNK_ID: ${c.chunk_id} | PAGE: ${c.page}]\\n${c.text}`).join("\\n\\n");
     const response = await generateObject({
       model: AI_MODELS.PARSER_MODEL,
+      mode: "json",
       schema: z.object({
          candidates: z.array(z.object({
             raw_value: z.string(),

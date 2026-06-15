@@ -14,7 +14,7 @@ const PROGRESS_FILE = path.resolve(__dirname, "../../../../eval/extract_e2e_" + 
 export async function runE2EEval(batchSize: number = 999) {
   console.log("E2E Measurement su GT v2 (batchSize=" + batchSize + ")...");
 
-  const hasApiKey = process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.ANTHROPIC_API_KEY;
+  const hasApiKey = process.env.GROQ_API_KEY || process.env.GOOGLE_GENERATIVE_AI_API_KEY || process.env.ANTHROPIC_API_KEY;
   if (!hasApiKey) { console.error("ERRORE: nessuna chiave API."); process.exit(1); }
 
   let gtData: any[];
