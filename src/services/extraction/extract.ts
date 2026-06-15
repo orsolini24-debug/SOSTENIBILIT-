@@ -3,7 +3,7 @@ import { db } from "@/db";
 import { extractionCandidates, extractionRuns, documentChunks, documents } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { retrieveChunks } from "../retrieval/retrieve";
-import { generateObject } from "ai";
+import { generateText } from "ai";
 import { AI_MODELS } from "@/lib/model-config";
 import crypto from "crypto";
 
@@ -168,37 +168,33 @@ export async function extract(documentId: string, disclosureId: string, runId?: 
      };
   } else {
     const contextText = chunks.map(c => `[CHUNK_ID: ${c.chunk_id} | PAGE: ${c.page}]\\n${c.text}`).join("\\n\\n");
-    const response = await generateObject({
+    const responseText = await generateText({
       model: AI_MODELS.PARSER_MODEL,
-      mode: "json",
-      schema: z.object({
-         candidates: z.array(z.object({
-            raw_value: z.string(),
-            normalized_value: z.number().nullable(),
-            unit_raw: z.string(),
-            year: z.number().nullable(),
-            evidence_text: z.string(),
-            chunk_id: z.string(),
-            confidence_score: z.number() // 0-1
-            }))
-            }),
-            prompt: `
-            Estrai i candidati per la metrica ${disclosureId} dai seguenti frammenti di testo.
-            Devi restituire il valore esatto (raw_value), un valore numerico normalizzato (se applicabile),
-            l'unita di misura trovata, l'anno di riferimento, la frase esatta di evidenza e il CHUNK_ID.
+      prompt: `Estrai i candidati per la metrica ${disclosureId} dai seguenti frammenti di testo.
+Rispondi SOLO con JSON valido nel formato: {"candidates": [{"raw_value": "...", "normalized_value": 123.4, "unit_raw": "...", "year": 2024, "evidence_text": "...", "chunk_id": "...", "confidence_score": 0.9}]}
+Non aggiungere testo fuori dal JSON.
 
-            REGOLE RIGOROSE:
-            1. ANNO: Se l'anno non e esplicitamente citato nel testo o facilmente deducibile dal contesto immediato, restituisci null. NON inventarlo e non assumere 2024 di default.
-            2. ANTI-TRAPPOLA: Non estrarre MAI target/obiettivi futuri, valori storici di baseline (es. 2018, 2020 usati per confronto) o metriche di intensita (es. kWh per dipendente, tonnellate per milione di fatturato) a meno che non sia esplicitamente richiesto dalla metrica. Cerca solo il valore assoluto corrente.
-            3. SCOPE SPECIFICITY: Per metriche di tipo "scope_1", estrai SOLO il valore con etichetta esplicita "Scope 1", "GHG Scope 1" o "Emissioni Scope 1". NON estrarre MAI aggregati come "Scope 1+2", "Scope 1+2+3", "Total GHG", "Totale emissioni GES", "GHG totali". Se una tabella ha piu righe, leggi le label con cura e scegli SOLO la riga Scope 1. Per "scope_2_market_based", estrai solo il valore esplicitamente etichettato "market-based" o "mercato", non il location-based.
-            4. TABELLE FRAMMENTATE: I PDF dividono spesso le tabelle in chunk separati con header e valori distinti. Se un chunk contiene solo numeri senza label, cerca la label nel testo circostante degli altri chunk con lo stesso PAGE. NON estrarre numeri orfani privi di etichetta identificativa chiara.
-            5. VALORE RAW: Restituisci il valore ESATTAMENTE come appare nel documento (es. "37.903" se il doc usa il punto come separatore migliaia, "27.106 MWh" se accompagnato da unita). Non convertire unita, non ricalcolare.
+REGOLE RIGOROSE:
+1. ANNO: Se l'anno non e esplicitamente citato nel testo o facilmente deducibile dal contesto immediato, restituisci null. NON inventarlo e non assumere 2024 di default.
+2. ANTI-TRAPPOLA: Non estrarre MAI target/obiettivi futuri, valori storici di baseline (es. 2018, 2020 usati per confronto) o metriche di intensita (es. kWh per dipendente, tonnellate per milione di fatturato) a meno che non sia esplicitamente richiesto dalla metrica. Cerca solo il valore assoluto corrente.
+3. SCOPE SPECIFICITY: Per metriche di tipo "scope_1", estrai SOLO il valore con etichetta esplicita "Scope 1", "GHG Scope 1" o "Emissioni Scope 1". NON estrarre MAI aggregati come "Scope 1+2", "Scope 1+2+3", "Total GHG", "Totale emissioni GES", "GHG totali". Se una tabella ha piu righe, leggi le label con cura e scegli SOLO la riga Scope 1. Per "scope_2_market_based", estrai solo il valore esplicitamente etichettato "market-based" o "mercato", non il location-based.
+4. TABELLE FRAMMENTATE: I PDF dividono spesso le tabelle in chunk separati con header e valori distinti. Se un chunk contiene solo numeri senza label, cerca la label nel testo circostante degli altri chunk con lo stesso PAGE. NON estrarre numeri orfani privi di etichetta identificativa chiara.
+5. VALORE RAW: Restituisci il valore ESATTAMENTE come appare nel documento (es. "37.903" se il doc usa il punto come separatore migliaia, "27.106 MWh" se accompagnato da unita). Non convertire unita, non ricalcolare.
 
-            CONTESTO:
-            ${contextText}
-            `
-            });
-    object = response.object;
+CONTESTO:
+${contextText}
+`
+    });
+    // Parse manuale: bypassa json_schema (non supportato da Groq llama)
+    try {
+      const raw = responseText.text.trim();
+      // Estrai JSON anche se il modello aggiunge testo prima/dopo
+      const jsonMatch = raw.match(/\{[\s\S]*\}/);
+      object = jsonMatch ? JSON.parse(jsonMatch[0]) : { candidates: [] };
+    } catch (parseErr) {
+      console.error("  JSON parse error:", String(parseErr).substring(0, 80));
+      object = { candidates: [] };
+    }
   }
 
   if (!object.candidates || object.candidates.length === 0) {
