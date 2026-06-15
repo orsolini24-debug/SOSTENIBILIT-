@@ -167,7 +167,7 @@ export async function extract(documentId: string, disclosureId: string, runId?: 
        }]
      };
   } else {
-    const contextText = chunks.map(c => `[CHUNK_ID: ${c.chunk_id} | PAGE: ${c.page}]\\n${c.text}`).join("\\n\\n");
+    const contextText = chunks.map(c => `[CHUNK_ID: ${c.chunk_id} | PAGE: ${c.page}]\\n${c.text.substring(0, 1500)}`).join("\\n\\n");
     const responseText = await generateText({
       model: AI_MODELS.PARSER_MODEL,
       prompt: `Estrai i candidati per la metrica ${disclosureId} dai seguenti frammenti di testo.
