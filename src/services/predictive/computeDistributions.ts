@@ -323,12 +323,27 @@ export async function computeDistributions(dryRun = false) {
     const macroStats = macroRecs.length > 0 ? getStats(macroRecs) : null;
 
     const shrunken = shrunkenStats(clusterStats, macroStats);
-    const sharpness = shrunken.p25 > 0 ? shrunken.p75 / shrunken.p25 : null;
     const w = shrunken.shrinkageWeight;
+
+    // N=1 uncertainty floor: degenerate interval [x,x] → heuristic ±50% around median.
+    // gate_eligible=false is declared via sourceType so callers and the backtest can split
+    // "eligible" (N>1, real distribution) from "insufficient_sample" (heuristic floor only).
+    // Declared in MODEL_CARD §Assumptions: interval_method="heuristic_uncertainty_floor",
+    // confidence="Molto bassa", not counted in Gate G3.1 eligible denominator.
+    const isDegenerate = clusterStats.n === 1 && Math.abs(shrunken.p25 - shrunken.p75) < 1e-6;
+    if (isDegenerate) {
+      shrunken.p25 = shrunken.median * 0.5;
+      shrunken.p75 = shrunken.median * 2.0;
+    }
+    const sourceType = isDegenerate ? "heuristic_uncertainty_floor" : "statistical";
+
+    const sharpness = shrunken.p25 > 0 ? shrunken.p75 / shrunken.p25 : null;
 
     // Confidence rules
     let confidence: string;
-    if (clusterStats.n >= 30 && w >= 0.8 && sharpness !== null && sharpness < 3) confidence = "Alta";
+    if (isDegenerate) {
+      confidence = "Molto bassa"; // heuristic floor — single observation, not a real distribution
+    } else if (clusterStats.n >= 30 && w >= 0.8 && sharpness !== null && sharpness < 3) confidence = "Alta";
     else if (clusterStats.n >= 10 && sharpness !== null && sharpness < 5) confidence = "Media";
     else confidence = "Bassa";
     // Cap at Media: corpus is large-company biased, not PMI-calibrated yet
@@ -348,14 +363,15 @@ export async function computeDistributions(dryRun = false) {
       shrinkageWeight: w.toFixed(3),
       fallbackLevel,
       sharpness: sharpness !== null ? sharpness.toFixed(3) : null,
-      sourceType: "statistical",
+      sourceType,
       period: "FY2024",
       version: VERSION,
     };
 
     const label = `${clusterFullName} / ${indicatorId}`;
+    const floorTag = isDegenerate ? " [FLOOR]" : "";
     console.log(
-      `  ${confidence.padEnd(5)} N=${String(clusterStats.n).padStart(2)} w=${w.toFixed(2)} sharpness=${(sharpness??0).toFixed(1)}x` +
+      `  ${confidence.padEnd(11)} N=${String(clusterStats.n).padStart(2)} w=${w.toFixed(2)} sharpness=${(sharpness??0).toFixed(1)}x${floorTag}` +
       `  p25=${shrunken.p25.toFixed(2)} med=${shrunken.median.toFixed(2)} p75=${shrunken.p75.toFixed(2)}` +
       `  → ${label}`
     );
