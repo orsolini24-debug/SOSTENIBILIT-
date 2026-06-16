@@ -64,6 +64,13 @@
       "when": 1781654460000,
       "tag": "0008_esg_full_schema",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1781654520000,
+      "tag": "0009_framework_versioning",
+      "breakpoints": true
     }
   ]
 }
