@@ -92,26 +92,12 @@ def load_gt(holdout: set[str]) -> tuple[list[dict], list[dict]]:
 
 
 def parse_italian_number(s: str) -> float | None:
-    """Parse Italian-formatted number: '31.256' → 31256, '1,5' → 1.5, '682803.0' → 682803.0
-
-    Rules:
-    - If comma present → European format: strip dots (thousands), comma → decimal point
-    - If no comma → inspect dots:
-        * All post-first-dot groups have exactly 3 digits → Italian thousands, strip dots
-        * Otherwise → standard decimal notation (e.g. '682803.0', '377143.3'), keep as-is
-    """
+    """Parse Italian-formatted number: '31.256' → 31256, '1,5' → 1.5"""
     s = s.strip()
     if not s:
         return None
-    if "," in s:
-        # European format: '1.234,56' or '682.803'
-        s = s.replace(".", "").replace(",", ".")
-    elif "." in s:
-        parts = s.split(".")
-        # Italian thousands: every segment after the first has exactly 3 digits
-        if all(len(p) == 3 for p in parts[1:]):
-            s = s.replace(".", "")
-        # else: standard decimal (e.g. '682803.0', '377143.3') → keep as-is
+    # Remove thousands dots, convert decimal comma
+    s = s.replace(".", "").replace(",", ".")
     try:
         v = float(s)
         return v if v > 0 else None
@@ -218,14 +204,9 @@ def run_backtest(dry: bool = False):
         in_interval = p25 <= actual <= p75
         sharpness = (p75 / p25) if p25 > 0 else None
         rel_error = abs(predicted - actual) / actual if actual > 0 else None
-        # gate_eligible: N=1 cells use a heuristic uncertainty floor (sourceType=
-        # "heuristic_uncertainty_floor") and are excluded from the gate denominator.
-        # They are still reported but not counted as PASS/FAIL for G3.1.
-        gate_eligible = n > 1
 
         status = "✅ HIT" if in_interval else "❌ MISS"
-        elig_tag = "" if gate_eligible else " [N=1 FLOOR — not counted in gate]"
-        print(f"    actual={actual:.1f}  [p25={p25:.1f}, p75={p75:.1f}]  {status}{elig_tag}")
+        print(f"    actual={actual:.1f}  [p25={p25:.1f}, p75={p75:.1f}]  {status}")
         print(f"    conf={confidence}  fallback={fallback}  N={n}  " +
               f"sharpness={f'{sharpness:.1f}x' if sharpness else 'n/d'}  " +
               f"MAPE={f'{rel_error:.1%}' if rel_error is not None else 'n/d'}")
@@ -238,7 +219,6 @@ def run_backtest(dry: bool = False):
             "p25": p25,
             "p75": p75,
             "in_interval": in_interval,
-            "gate_eligible": gate_eligible,
             "sharpness": sharpness,
             "rel_error": rel_error,
             "confidence": confidence,
@@ -252,33 +232,58 @@ def run_backtest(dry: bool = False):
 
     # ---- Metrics ----
     n_total = len(results)
-    # Eligible = N>1 (real statistical distribution, not heuristic floor)
-    eligible = [r for r in results if r["gate_eligible"]]
-    insufficient = [r for r in results if not r["gate_eligible"]]
-
-    # Gate G3.1 is evaluated ONLY on eligible predictions (N>1)
-    n_elig = len(eligible)
-    hit_rate      = sum(1 for r in eligible if r["in_interval"]) / n_elig if n_elig else 0.0
-    sharp_ok_rate = sum(1 for r in eligible if r["sharpness"] is not None and r["sharpness"] < 3) / n_elig if n_elig else 0.0
-    mapes = [r["rel_error"] for r in eligible if r["rel_error"] is not None]
+    hit_rate = sum(1 for r in results if r["in_interval"]) / n_total
+    sharp_ok = sum(1 for r in results if r["sharpness"] is not None and r["sharpness"] < 3) / n_total
+    mapes = [r["rel_error"] for r in results if r["rel_error"] is not None]
     median_mape = statistics.median(mapes) if mapes else None
 
-    # Informational: overall (all predictions, incl. floor)
-    hit_rate_all = sum(1 for r in results if r["in_interval"]) / n_total
-
-    cluster_hits  = [r for r in eligible if r["fallback_level"] == "cluster" and r["in_interval"]]
-    cluster_total = [r for r in eligible if r["fallback_level"] == "cluster"]
-    macro_hits    = [r for r in eligible if r["fallback_level"] == "macro_sector" and r["in_interval"]]
-    macro_total   = [r for r in eligible if r["fallback_level"] == "macro_sector"]
-    nat_hits      = [r for r in eligible if r["fallback_level"] == "national" and r["in_interval"]]
-    nat_total     = [r for r in eligible if r["fallback_level"] == "national"]
+    cluster_hits  = [r for r in results if r["fallback_level"] == "cluster" and r["in_interval"]]
+    cluster_total = [r for r in results if r["fallback_level"] == "cluster"]
+    macro_hits    = [r for r in results if r["fallback_level"] == "macro_sector" and r["in_interval"]]
+    macro_total   = [r for r in results if r["fallback_level"] == "macro_sector"]
+    nat_hits      = [r for r in results if r["fallback_level"] == "national" and r["in_interval"]]
+    nat_total     = [r for r in results if r["fallback_level"] == "national"]
 
     gate_hit_pass   = hit_rate >= 0.70
-    gate_sharp_pass = sharp_ok_rate >= 0.60
+    gate_sharp_pass = sharp_ok >= 0.60
 
-    def pct(hits, total): return f"{len(hits)/len(total):.0%}" if total else "n/d"
-
-    print(f"\n{'='*60}")
+    print(f"\n{'='*55}")
     print(f"Gate G3.1 Results — {n_total} predictions ({skipped} skipped)")
-    print(f"  Eligible (N>1, real distribution) : {n_elig}")
-    print(f"  Insufficient_sample (N=1, floor)  : {len(in
+    print(f"{'='*55}")
+    print(f"  Hit rate (actual ∈ [p25,p75]) : {hit_rate:.1%}  {'✅ PASS' if gate_hit_pass else '❌ FAIL'}  (target ≥70%)")
+    print(f"  Sharpness OK (p75/p25 < 3)   : {sharp_ok:.1%}  {'✅ PASS' if gate_sharp_pass else '❌ FAIL'}  (target ≥60%)")
+    if median_mape is not None:
+        print(f"  Median MAPE                   : {median_mape:.1%}")
+    print(f"\n  By fallback level:")
+    def pct(hits, total): return f"{len(hits)/len(total):.0%}" if total else "n/d"
+    print(f"    cluster      : {pct(cluster_hits, cluster_total)} hit ({len(cluster_total)} predictions)")
+    print(f"    macro_sector : {pct(macro_hits, macro_total)} hit ({len(macro_total)} predictions)")
+    print(f"    national     : {pct(nat_hits, nat_total)} hit ({len(nat_total)} predictions)")
+
+    overall = "✅ PASS" if gate_hit_pass and gate_sharp_pass else "❌ FAIL"
+    print(f"\nGate G3.1 Overall: {overall}")
+    print(f"{'='*55}\n")
+
+    # Write results
+    output = {
+        "gate": "G3.1",
+        "date": "2026-06-16",
+        "dry_run": dry,
+        "n_total": n_total,
+        "n_skipped": skipped,
+        "hit_rate": round(hit_rate, 4),
+        "sharpness_ok_rate": round(sharp_ok, 4),
+        "median_mape": round(median_mape, 4) if median_mape else None,
+        "gate_pass": gate_hit_pass and gate_sharp_pass,
+        "predictions": results,
+    }
+    with open(RESULTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(output, f, ensure_ascii=False, indent=2)
+    print(f"Results saved → {RESULTS_FILE}")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry", action="store_true", help="Dry run: no API calls")
+    args = parser.parse_args()
+    run_backtest(dry=args.dry)
