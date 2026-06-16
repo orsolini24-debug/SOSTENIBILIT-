@@ -140,18 +140,20 @@ async function resolveDatapointId(disclosureId: string): Promise<string | null> 
 }
 
 export async function extract(documentId: string, disclosureId: string, runId?: string): Promise<ExtractionResult> {
-  const extractionRunId = runId || crypto.randomUUID();
-
   // 0. Crea il record extraction_run (FK richiesta da extraction_candidates)
-  //    Se runId è stato passato dall'esterno, il chiamante è responsabile del record.
-  if (!runId) {
-    await db.insert(extractionRuns).values({
-      id: extractionRunId,
+  //    Usa .returning() per ottenere l'UUID esatto assegnato dal DB (evita FK mismatch
+  //    con client-generated UUID quando defaultRandom() genera un valore diverso lato DB).
+  let extractionRunId: string;
+  if (runId) {
+    extractionRunId = runId;
+  } else {
+    const [inserted] = await db.insert(extractionRuns).values({
       documentId: documentId,
       model: AI_MODELS.PARSER_MODEL_NAME,
       promptVersion: "v8.0",
       status: "running",
-    });
+    }).returning({ id: extractionRuns.id });
+    extractionRunId = inserted.id;
   }
 
   // 1. Retrieval
