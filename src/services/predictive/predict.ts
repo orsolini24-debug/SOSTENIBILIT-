@@ -72,6 +72,12 @@ const DEFAULT_VERSION = "1.0";
 const FALLBACK_SHARPNESS_CAP = 5; // flag if p75/p25 > 5
 
 // Minimum N to use cluster-level distribution directly (vs. shrunk)
+// GT slug → esg_indicators.id mapping (scope_2 variants use shorter IDs in DB)
+const GT_SLUG_TO_ESG_ID: Record<string, string> = {
+  "scope_2_location_based_ghg_emissions": "scope_2_location_based",
+  "scope_2_market_based_ghg_emissions":   "scope_2_market_based",
+};
+
 const MIN_N_DIRECT = 5;
 
 // All known indicators (predict all if not specified in profile)
@@ -129,7 +135,14 @@ function driverValue(
 
 export async function predict(profile: CompanyProfile): Promise<PredictOutput> {
   const version = profile.distributionVersion ?? DEFAULT_VERSION;
-  const requestedIndicators = profile.indicators ?? ALL_INDICATORS;
+  // Normalize GT slugs to esg_indicator IDs stored in sector_distributions
+  const rawIndicators = profile.indicators ?? ALL_INDICATORS;
+  const requestedIndicators = rawIndicators.map((id: string) => GT_SLUG_TO_ESG_ID[id] ?? id);
+  // Reverse map: esg DB id → original request id (so output uses the caller's indicator names)
+  const esgIdToOrigId: Record<string, string> = {};
+  for (const orig of rawIndicators) {
+    esgIdToOrigId[GT_SLUG_TO_ESG_ID[orig] ?? orig] = orig;
+  }
 
   // 1. Resolve cluster
   const prefix = nacePrefix(profile.naceCode);
@@ -166,7 +179,7 @@ export async function predict(profile: CompanyProfile): Promise<PredictOutput> {
           and(
             eq(sectorDistributions.clusterId, clusterId),
             eq(sectorDistributions.version, version),
-            inArray(sectorDistributions.indicatorId, requestedIndicators)
+            inArray(sectorDistributions.esgIndicatorId, requestedIndicators)
           )
         )
     : [];
@@ -192,15 +205,15 @@ export async function predict(profile: CompanyProfile): Promise<PredictOutput> {
           and(
             inArray(sectorDistributions.clusterId, macroClusterIds),
             eq(sectorDistributions.version, version),
-            inArray(sectorDistributions.indicatorId, requestedIndicators)
+            inArray(sectorDistributions.esgIndicatorId, requestedIndicators)
           )
         );
 
       // Average across macro-sector clusters per indicator
       const tempAgg: Record<string, { p25s: number[]; meds: number[]; p75s: number[] }> = {};
       for (const d of macroDists) {
-        if (!d.p25 || !d.median || !d.p75 || !d.indicatorId) continue;
-        const indKey = d.indicatorId;
+        if (!d.p25 || !d.median || !d.p75 || !d.esgIndicatorId) continue;
+        const indKey = d.esgIndicatorId!;
         if (!tempAgg[indKey]) tempAgg[indKey] = { p25s: [], meds: [], p75s: [] };
         tempAgg[indKey].p25s.push(parseFloat(d.p25));
         tempAgg[indKey].meds.push(parseFloat(d.median));
@@ -227,13 +240,14 @@ export async function predict(profile: CompanyProfile): Promise<PredictOutput> {
   // 4. Build index for cluster distributions
   const clusterDistMap: Record<string, typeof sectorDistributions.$inferSelect> = {};
   for (const d of clusterDists) {
-    if (d.indicatorId) clusterDistMap[d.indicatorId] = d;
+    if (d.esgIndicatorId) clusterDistMap[d.esgIndicatorId] = d;
   }
 
   // 5. Predict each indicator
   const resultPredictions: PredictionResult[] = [];
 
   for (const indicatorId of requestedIndicators) {
+    const outputId = esgIdToOrigId[indicatorId] ?? indicatorId; // original caller ID
     const defaultProfile = INDICATOR_DEFAULT_DRIVER[indicatorId];
     const driver = defaultProfile?.driver ?? "employees";
     const unit = defaultProfile?.unit ?? "value/employee";
@@ -258,7 +272,7 @@ export async function predict(profile: CompanyProfile): Promise<PredictOutput> {
       const actualUnit = driverAvailable ? unit : unit.replace(/\/.*/, "/employee");
 
       p = {
-        indicatorId,
+        indicatorId: outputId,
         predictedValue: medi * dv,
         p25Value: p25i * dv,
         p75Value: p75i * dv,
@@ -290,7 +304,7 @@ export async function predict(profile: CompanyProfile): Promise<PredictOutput> {
       const n = macroDist.nSamples ?? 0;
 
       p = {
-        indicatorId,
+        indicatorId: outputId,
         predictedValue: medi * dv,
         p25Value: p25i * dv,
         p75Value: p75i * dv,
@@ -341,7 +355,7 @@ export async function predict(profile: CompanyProfile): Promise<PredictOutput> {
 
       const fallbackVal = nationalValue ?? 0;
       p = {
-        indicatorId,
+        indicatorId: outputId,
         predictedValue: fallbackVal,
         p25Value: fallbackVal * 0.5,
         p75Value: fallbackVal * 2.0,

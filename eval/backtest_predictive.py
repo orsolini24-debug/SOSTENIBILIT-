@@ -37,7 +37,7 @@ import argparse
 import urllib.request
 import urllib.error
 
-GT_FILE = os.path.join(os.path.dirname(__file__), "ground_truth_v2.csv")
+GT_FILE = os.path.join(os.path.dirname(__file__), "..", "..", "eval", "ground_truth_v2.csv")
 RESULTS_FILE = os.path.join(os.path.dirname(__file__), "backtest_results.json")
 API_BASE = os.getenv("PREDICT_API", "http://localhost:3001")
 
