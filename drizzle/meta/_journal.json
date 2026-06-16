@@ -50,6 +50,20 @@
       "when": 1781274482519,
       "tag": "0006_concerned_squadron_sinister",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1781654400000,
+      "tag": "0007_predictive_engine",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1781654460000,
+      "tag": "0008_esg_full_schema",
+      "breakpoints": true
     }
   ]
 }
