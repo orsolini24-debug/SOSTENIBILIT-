@@ -84,6 +84,14 @@ const NACE_TO_CLUSTER: Record<string, string> = {
   "62": "gdo_retail", "63": "gdo_retail",
 };
 
+// ---- GT slug → esg_indicators.id mapping ----
+// The GT CSV uses full disclosure slugs; the esg_indicators seed uses shorter IDs.
+// This mapping bridges the two without requiring a migration.
+const GT_SLUG_TO_ESG_ID: Record<string, string> = {
+  "scope_2_location_based_ghg_emissions": "scope_2_location_based",
+  "scope_2_market_based_ghg_emissions":   "scope_2_market_based",
+};
+
 // ---- Statistical helpers ----
 
 function percentile(sorted: number[], p: number): number {
@@ -175,6 +183,7 @@ export async function computeDistributions(dryRun = false) {
   for (const row of verified) {
     const companyName: string = row.company_name || "";
     const indicatorId: string = row.disclosure_id || "";
+    const esgId: string = GT_SLUG_TO_ESG_ID[indicatorId] ?? indicatorId;
     const naceCode: string = (row.nace_code || "").replace(/\./g, "");
     const nacePrefix = naceCode.substring(0, 2);
     const rawValueStr: string = row.expected_value || "";
@@ -215,7 +224,7 @@ export async function computeDistributions(dryRun = false) {
     const clusterFullName = `${clusterBaseName}_${sizeClass}`;
 
     // Determine intensity driver and compute intensity
-    const profile = INDICATOR_DEFAULT_DRIVER[indicatorId];
+    const profile = INDICATOR_DEFAULT_DRIVER[esgId] ?? INDICATOR_DEFAULT_DRIVER[indicatorId];
     const driver = profile?.driver ?? "employees";
     const unit = profile?.unit ?? "value/employee";
 
@@ -322,7 +331,7 @@ export async function computeDistributions(dryRun = false) {
 
     const row = {
       clusterId,
-      indicatorId,
+      esgIndicatorId: GT_SLUG_TO_ESG_ID[indicatorId] ?? indicatorId,
       intensityDriver: recs[0].driver,
       intensityUnit: recs[0].unit,
       p25:    shrunken.p25.toFixed(6),
@@ -351,7 +360,7 @@ export async function computeDistributions(dryRun = false) {
       .from(sectorDistributions)
       .where(and(
         eq(sectorDistributions.clusterId, clusterId),
-        eq(sectorDistributions.indicatorId, indicatorId),
+        eq(sectorDistributions.esgIndicatorId, GT_SLUG_TO_ESG_ID[indicatorId] ?? indicatorId),
         eq(sectorDistributions.version, VERSION)
       ))
       .limit(1);
