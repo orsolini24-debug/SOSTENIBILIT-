@@ -180,6 +180,18 @@ export async function computeDistributions(dryRun = false) {
   const records: IntensityRecord[] = [];
   const skippedReasons: string[] = [];
 
+  // Robust Italian/decimal number parser — avoids ×10 bug where '682803.0' → 6828030.
+  // Rules: comma → European (strip dots, comma=decimal); no comma + all-3-digit segments → Italian thousands; else standard decimal.
+  function parseItalianNumber(s: string): number {
+    if (s.includes(",")) return parseFloat(s.replace(/\./g, "").replace(",", "."));
+    if (s.includes(".")) {
+      const parts = s.split(".");
+      if (parts.slice(1).every(p => p.length === 3)) return parseFloat(s.replace(/\./g, ""));
+      return parseFloat(s); // standard decimal: '682803.0', '377143.3'
+    }
+    return parseFloat(s);
+  }
+
   for (const row of verified) {
     const companyName: string = row.company_name || "";
     const indicatorId: string = row.disclosure_id || "";
@@ -188,12 +200,7 @@ export async function computeDistributions(dryRun = false) {
     const nacePrefix = naceCode.substring(0, 2);
     const rawValueStr: string = row.expected_value || "";
 
-    // Parse value
-    const rawValue = parseFloat(
-      rawValueStr
-        .replace(/\./g, "")   // remove Italian thousands dots
-        .replace(",", ".")    // convert decimal comma
-    );
+    const rawValue = parseItalianNumber(rawValueStr);
     if (isNaN(rawValue) || rawValue <= 0) {
       skippedReasons.push(`  SKIP invalid value: ${companyName} / ${indicatorId} → "${rawValueStr}"`);
       continue;
