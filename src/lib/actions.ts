@@ -20,13 +20,23 @@ export async function uploadAndParseDocument(projectId: string, formData: FormDa
     throw new Error("Nessun file caricato");
   }
 
+  // A8: Validazione tipo e dimensione
+  const ALLOWED_TYPES = ["application/pdf"];
+  const MAX_SIZE_BYTES = 20 * 1024 * 1024; // 20 MB
+  if (!ALLOWED_TYPES.includes(file.type)) {
+    throw new Error(`Tipo file non supportato: ${file.type}. Caricare solo PDF.`);
+  }
+  if (file.size > MAX_SIZE_BYTES) {
+    throw new Error(`File troppo grande (${(file.size / 1024 / 1024).toFixed(1)} MB). Limite: 20 MB.`);
+  }
+
   // 1. Upload su Vercel Blob (strategia PRIVATA)
   let storagePath = "";
   if (process.env.BLOB_READ_WRITE_TOKEN) {
     // Usiamo access: "private" come supportato da @vercel/blob
-    const blob = await put(`vault/${Date.now()}-${file.name}`, file, { 
+    const blob = await put(`vault/${Date.now()}-${file.name}`, file, {
       access: "private",
-      addRandomSuffix: true 
+      addRandomSuffix: true
     });
     storagePath = blob.url;
   } else {
@@ -50,9 +60,10 @@ export async function uploadAndParseDocument(projectId: string, formData: FormDa
   const text = data.text;
 
   // 4. Esecuzione Parsing AI con Lineage Corretto
+  // C2: usare PARSER_MODEL_NAME (stringa) non PARSER_MODEL (oggetto LanguageModelV1)
   const [run] = await db.insert(extractionRuns).values({
     documentId: doc.id,
-    model: AI_MODELS.PARSER_MODEL,
+    model: AI_MODELS.PARSER_MODEL_NAME,
     status: "running",
   }).returning();
 
@@ -88,7 +99,7 @@ export async function uploadAndParseDocument(projectId: string, formData: FormDa
 }
 
 export async function validateDatapoint(projectId: string, datapointValueId: string, extractedFieldId: string) {
-  // Delega alla fonte di verità unica (services/validation.ts): scrive evidence_link,
+  // Delega alla fonte di verita unica (services/validation.ts): scrive evidence_link,
   // validation_event e audit_event e applica i sanity-check settoriali.
   const result = await validateExtractedField(projectId, datapointValueId, extractedFieldId);
   revalidatePath(`/dashboard/${projectId}`);

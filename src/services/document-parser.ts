@@ -1,5 +1,4 @@
 import { generateObject } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
 import { z } from "zod";
 
 import { AI_MODELS } from "@/lib/model-config";
@@ -37,7 +36,7 @@ export async function parseDocument(documentText: string, documentType: "bollett
   }
 
   const { object } = await generateObject({
-    model: anthropic(AI_MODELS.PARSER_MODEL),
+    model: AI_MODELS.PARSER_MODEL,
     schema: z.object({
 
       extracted_fields: z.array(

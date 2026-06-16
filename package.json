@@ -6,18 +6,20 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "test": "npx tsx src/tests/certificationGuardrail.test.ts && npx tsx src/tests/integrity.test.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.76",
-    "@base-ui/react": "^1.4.1",
+    "@ai-sdk/google": "^3.0.0",
+    "@ai-sdk/groq": "^3.0.41",
     "@neondatabase/serverless": "^1.1.0",
     "@vercel/blob": "^2.3.3",
     "ai": "^6.0.177",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
-    "lucide-react": "^1.14.0",
+    "lucide-react": "^0.414.0",
     "next": "16.2.6",
     "next-auth": "^4.24.11",
     "pdf-parse": "^2.4.5",

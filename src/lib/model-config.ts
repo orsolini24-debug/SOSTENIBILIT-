@@ -18,7 +18,7 @@ import { google } from "@ai-sdk/google";
 import { anthropic } from "@ai-sdk/anthropic";
 
 // Cambia ACTIVE_PROVIDER per switchare modello senza toccare il resto del codice
-const ACTIVE_PROVIDER: "groq" | "gemini" | "sonnet" | "opus" = "gemini";
+const ACTIVE_PROVIDER: "groq" | "gemini" | "sonnet" | "opus" = "sonnet";
 
 const groq = createGroq({ apiKey: process.env.GROQ_API_KEY });
 

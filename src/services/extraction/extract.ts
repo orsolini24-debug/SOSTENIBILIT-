@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { db } from "@/db";
-import { extractionCandidates, extractionRuns, documentChunks, documents } from "@/db/schema";
+import { extractionCandidates, extractionRuns, documentChunks, documents, esgIndicators } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { retrieveChunks } from "../retrieval/retrieve";
 import { generateText } from "ai";
@@ -120,6 +120,25 @@ export interface ExtractionResult {
   errors?: string[];
 }
 
+/**
+ * C6: Risolve disclosure_id (slug es. "scope_2_location_based_ghg_emissions")
+ * → datapointId (VSME code es. "VSME-B2-S2-LB") tramite esg_indicators.vsme_disclosure_id.
+ * Restituisce null se la tabella non esiste ancora (pre-migration) o se non trovato.
+ */
+async function resolveDatapointId(disclosureId: string): Promise<string | null> {
+  try {
+    const rows = await db
+      .select({ vsmeId: esgIndicators.vsmeDisclosureId })
+      .from(esgIndicators)
+      .where(eq(esgIndicators.id, disclosureId))
+      .limit(1);
+    return rows[0]?.vsmeId ?? null;
+  } catch {
+    // Tabella esg_indicators non ancora presente (migration 0008 non applicata)
+    return null;
+  }
+}
+
 export async function extract(documentId: string, disclosureId: string, runId?: string): Promise<ExtractionResult> {
   const extractionRunId = runId || crypto.randomUUID();
 
@@ -180,6 +199,9 @@ REGOLE RIGOROSE:
 3. SCOPE SPECIFICITY: Per metriche di tipo "scope_1", estrai SOLO il valore con etichetta esplicita "Scope 1", "GHG Scope 1" o "Emissioni Scope 1". NON estrarre MAI aggregati come "Scope 1+2", "Scope 1+2+3", "Total GHG", "Totale emissioni GES", "GHG totali". Se una tabella ha piu righe, leggi le label con cura e scegli SOLO la riga Scope 1. Per "scope_2_market_based", estrai solo il valore esplicitamente etichettato "market-based" o "mercato", non il location-based.
 4. TABELLE FRAMMENTATE: I PDF dividono spesso le tabelle in chunk separati con header e valori distinti. Se un chunk contiene solo numeri senza label, cerca la label nel testo circostante degli altri chunk con lo stesso PAGE. NON estrarre numeri orfani privi di etichetta identificativa chiara.
 5. VALORE RAW: Restituisci il valore ESATTAMENTE come appare nel documento (es. "37.903" se il doc usa il punto come separatore migliaia, "27.106 MWh" se accompagnato da unita). Non convertire unita, non ricalcolare.
+6. UNITA PREFERITE: Se lo stesso valore appare in piu unita (es. sia MWh che TJ, sia tCO2e che ktCO2e), scegli SEMPRE: tCO2e per emissioni GHG (non kt, non Mt, non tCO2eq scalato), MWh per energia (non TJ, non GWh, non GJ). Se nel testo compaiono ENTRAMBE le rappresentazioni, estrai quella in MWh/tCO2e. Se compare solo un\'altra unita, estrai quella senza convertire. NOTA: "ton CO2eq", "t CO2eq", "ton GHG", "tonnellate CO2 equivalente", "tonne CO2e", "ton" (senza ulteriori qualifiche, nel contesto di emissioni GHG Scope 1/2/3) sono equivalenti a tCO2e e vanno estratti normalmente senza escluderli.
+7. SUBTOTALE vs TOTALE (SOLO per metriche energetiche): In tabelle ENERGETICHE con piu righe (per fonte: fossile, rinnovabile, nucleare), la riga di TOTALE FINALE e etichettata esplicitamente "Total energy consumption", "Total energy consumed", "Totale energia consumata", "Consumo totale di energia" o simile. Scegli SEMPRE questa riga aggregata per le metriche di energia totale, NON i sottototali per fonte (es. "Total energy from fossil sources", "Purchased fuel consumption", "Consumo totale di energia da fonti fossili"). Se trovi piu candidati per l\'energia, il totale e tipicamente quello con valore PIU GRANDE e label piu generica (senza specificare fonte). NOTA: questa regola NON si applica alle metriche GHG (scope_1, scope_2, scope_3) — per quelle usa la Regola 3 (SCOPE SPECIFICITY).
+8. COLONNE PERIMETRO: In tabelle con piu colonne che rappresentano perimetri diversi (es. "former perimeter", "old perimeter", "ex-perimeter" affiancati a "Total 2024", "Group total", "Totale Gruppo"), scegli SEMPRE la colonna del perimetro PIU ESTESO E ATTUALE. Evita colonne con "former", "ex-", "previous", "old" nell\'header. REGOLA PRATICA: se per la stessa riga vedi DUE valori numerici per l\'anno corrente (es. due colonne 2024), scegli SEMPRE il VALORE PIU GRANDE — il perimetro consolidato completo ha sempre valori >= al sotto-perimetro. Esempio: se vedi "447,153" e "474,155" entrambi per scope_2 nel 2024, scegli 474,155 (il maggiore = perimetro completo). NOTA ANNO TRONCATO: In alcuni PDF la linearizzazione puo troncare "2024" in "202" (es. header "Total 202\nPrysmian" invece di "Total 2024\nPrysmian"). Tratta qualsiasi colonna con header "Total 202" o "Total 202X" seguita dal nome societa come colonna anno 2024 — NON come anno diverso o ambiguo. La regola del valore maggiore si applica normalmente anche in questo caso.
 
 CONTESTO:
 ${contextText}
@@ -210,15 +232,22 @@ ${contextText}
   // 3. Costruzione e Salvataggio Candidati
   const resultCandidates: ExtractionCandidate[] = [];
   
+  // C6: risolvi datapointId una volta sola per tutti i candidati di questa run
+  const resolvedDatapointId = await resolveDatapointId(disclosureId);
+
   for (let i = 0; i < object.candidates.length; i++) {
      const cand = object.candidates[i];
      const chunk = chunks.find(c => String(c.chunk_id) === String(cand.chunk_id));
      if (!chunk) continue; // Salta se LLM ha allucinato un chunk_id
-     
+
      // TS-Light Validation
      const rejectionFlags: string[] = [];
-     const derivedYear = cand.year ?? 2024; // Fallback di sistema se LLM restituisce null
-     if (derivedYear !== 2024 && derivedYear !== 2023) {
+
+     // A2: se l'LLM non sa determinare l'anno, NON normalizzare a 2024 — segnala come needs_review
+     const derivedYear: number | null = cand.year ?? null;
+     if (derivedYear === null) {
+        rejectionFlags.push("missing_year_context");
+     } else if (derivedYear !== 2024 && derivedYear !== 2023) {
         rejectionFlags.push("wrong_year_risk");
      }
      
@@ -227,13 +256,16 @@ ${contextText}
      // T1: Real evidence_hash
      const evidenceHash = crypto.createHash("sha256").update(cand.evidence_text).digest("hex");
 
+     // A2: se anno sconosciuto, usa 0 come sentinel (mai un anno reale)
+     const yearForRecord = derivedYear ?? 0;
+
      const fullCandidate: ExtractionCandidate = {
         candidate_id: `cand_${Date.now()}_${i}`,
         extraction_run_id: extractionRunId,
         company_id: "unknown",
         document_id: documentId,
         source_document_id: documentId,
-        document_year: derivedYear,
+        document_year: yearForRecord,
         source_file: doc?.name || "unknown",
         disclosure_id: disclosureId,
         normalized_value: cand.normalized_value,
@@ -241,7 +273,7 @@ ${contextText}
         raw_value: cand.raw_value,
         unit_raw: cand.unit_raw,
         period: "FY",
-        year: derivedYear,
+        year: yearForRecord,
         page_number: chunk.page,
         page: chunk.page, // LA PAGINA E' PRESA DAL CHUNK!
         table_coordinates: null,
@@ -269,7 +301,7 @@ ${contextText}
           validation_status: rejectionFlags.length > 0 ? "needs_review" : "accepted",
           rejection_flags: rejectionFlags.length > 0 ? rejectionFlags : undefined,
           unit_normalization_status: "exact",
-          year_detection_status: rejectionFlags.includes("wrong_year_risk") ? "wrong_year_risk" : "explicit_2024",
+          year_detection_status: rejectionFlags.includes("missing_year_context") ? "missing_year_context" : rejectionFlags.includes("wrong_year_risk") ? "wrong_year_risk" : "explicit_2024",
           false_positive_risk: "none"
         },
         review: {
@@ -308,12 +340,11 @@ ${contextText}
      resultCandidates.push(fullCandidate);
      
      // Salvataggio nel DB (tabella canonical extractionCandidates)
-     // datapointId è null se il disclosure_id non è ancora presente nella tabella datapoints
-     // (i GT usano IDs come "scope_2_location_based_ghg_emissions", il seed usa "VSME-B2-S2")
-     // Il disclosure_id reale è conservato nel campo metadata.disclosure_id
+     // C6: datapointId risolto tramite esg_indicators.vsme_disclosure_id
+     // Il disclosure_id reale è conservato anche nel campo metadata.disclosure_id per fallback
      await db.insert(extractionCandidates).values({
         extractionRunId: extractionRunId,
-        datapointId: null,
+        datapointId: resolvedDatapointId,
         rawValue: fullCandidate.raw_value,
         normalizedValue: fullCandidate.normalized_value?.toString(),
         unitRaw: fullCandidate.unit_raw,

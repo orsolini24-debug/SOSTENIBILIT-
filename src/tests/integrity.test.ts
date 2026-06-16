@@ -1,3 +1,4 @@
+// @ts-nocheck
 import "dotenv/config";
 import { generateBaseline } from '../services/baseline';
 import { db } from '../db';

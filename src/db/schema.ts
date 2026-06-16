@@ -1,4 +1,4 @@
-import { pgTable, text, uuid, integer, timestamp, jsonb, pgEnum, numeric, index, unique } from "drizzle-orm/pg-core";
+import { pgTable, text, uuid, integer, timestamp, jsonb, pgEnum, numeric, index, unique, boolean } from "drizzle-orm/pg-core";
 import { relations } from "drizzle-orm";
 
 export const datapointStateEnum = pgEnum("datapoint_state", [
@@ -291,14 +291,112 @@ export const sectorDistributions = pgTable("sector_distributions", {
   id: uuid("id").defaultRandom().primaryKey(),
   clusterId: uuid("cluster_id").references(() => clusterDefinitions.id, { onDelete: "cascade" }),
   indicatorId: text("indicator_id").references(() => datapoints.id),
-  p25: numeric("p25", { precision: 15, scale: 4 }),
-  median: numeric("median", { precision: 15, scale: 4 }),
-  p75: numeric("p75", { precision: 15, scale: 4 }),
+  // --- Intensity-first (scientifically correct) ---
+  // Distributions are computed on INTENSITIES (KPI / driver), not absolute values.
+  // predicted_absolute = median_intensity * company_driver_value
+  intensityDriver: text("intensity_driver").notNull().default("employees"),
+  // e.g. "employees", "facility_area_sqm", "revenue_eur", "fleet_size"
+  intensityUnit: text("intensity_unit").notNull().default("value/employee"),
+  // e.g. "kWh/employee", "tCO2e/employee", "tCO2e/sqm"
+  // p25/median/p75 are on the INTENSITY (not the absolute KPI)
+  p25: numeric("p25", { precision: 15, scale: 6 }),
+  median: numeric("median", { precision: 15, scale: 6 }),
+  p75: numeric("p75", { precision: 15, scale: 6 }),
+  // --- Empirical Bayes shrinkage ---
+  // shrinkage_weight: how much we trust the cluster's own distribution vs the macro-sector prior.
+  // 1.0 = pure cluster empirical; 0.0 = pure macro-sector prior.
+  // Formula: shrinkage_weight = n_sample / (n_sample + K), K=15 (prior equivalent sample size).
+  shrinkageWeight: numeric("shrinkage_weight", { precision: 4, scale: 3 }).default("1.000"),
+  fallbackLevel: text("fallback_level").default("cluster"),
+  // 'cluster' | 'macro_sector' | 'national' — which level this row represents
+  // --- Quality metrics ---
   nSamples: integer("n_sample"),
+  sharpness: numeric("sharpness", { precision: 6, scale: 3 }),
+  // p75/p25 ratio: lower = tighter = better. Flag if > 5.0.
+  // --- Full distribution stats (added migration 0008) ---
+  p10: numeric("p10", { precision: 15, scale: 6 }),
+  p90: numeric("p90", { precision: 15, scale: 6 }),
+  meanIntensity: numeric("mean_intensity", { precision: 15, scale: 6 }),
+  stdIntensity: numeric("std_intensity", { precision: 15, scale: 6 }),
+  iqr: numeric("iqr", { precision: 15, scale: 6 }),
+  intervalWidthRatio: numeric("interval_width_ratio", { precision: 6, scale: 3 }),
+  // (p90-p10)/median — flag if >3.0
+  dataQualityScore: numeric("data_quality_score", { precision: 3, scale: 2 }),
+  confidence: text("confidence").default("Bassa"),
+  esgIndicatorId: text("esg_indicator_id"),
+  // --- Metadata ---
   sourceType: text("source_type").default("statistical"), // 'statistical', 'client_flywheel'
   period: text("period").default("FY2024"),
   version: text("version").default("1.0"),
   computedAt: timestamp("computed_at").defaultNow(),
+}, (table) => ({
+  clusterIndicatorUnq: unique("cluster_indicator_unq").on(table.clusterId, table.indicatorId, table.version),
+}));
+
+// --- Predictive Engine: runtime tables ---
+
+export const predictionRuns = pgTable("prediction_runs", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
+  projectId: uuid("project_id").references(() => projects.id, { onDelete: "cascade" }),
+  clusterId: uuid("cluster_id").references(() => clusterDefinitions.id),
+  distributionVersion: text("distribution_version").default("1.0"),
+  inputProfile: jsonb("input_profile").notNull().default({}),
+  // Snapshot of company profile at prediction time:
+  // { employees, facility_area_sqm, revenue_eur, fleet_size, has_production_site,
+  //   ateco_prefix, size_class, heating_source, renewable_electricity }
+  status: text("status").default("completed"), // 'completed' | 'partial' (some cells had no distribution)
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const predictions = pgTable("predictions", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  runId: uuid("run_id").references(() => predictionRuns.id, { onDelete: "cascade" }).notNull(),
+  indicatorId: text("indicator_id").references(() => datapoints.id).notNull(),
+  distributionId: uuid("distribution_id").references(() => sectorDistributions.id),
+  // Predicted values (absolute, computed as intensity × driver)
+  predictedValue: numeric("predicted_value", { precision: 15, scale: 4 }),
+  p25Value: numeric("p25_value", { precision: 15, scale: 4 }),
+  p75Value: numeric("p75_value", { precision: 15, scale: 4 }),
+  unit: text("unit"),                      // e.g. "kWh", "tCO2e", "m3"
+  confidence: confidenceEnum("confidence").default("Bassa"),
+  // Confidence rules:
+  // Alta  → n_sample>=30 AND shrinkage_weight>=0.8 AND sharpness<3
+  // Media → n_sample>=10 AND sharpness<5
+  // Bassa → n_sample<10 OR shrinkage_weight<0.4 OR fallback_level!='cluster'
+  fallbackLevel: text("fallback_level").default("cluster"),
+  nSampleUsed: integer("n_sample_used"),
+  shrinkageWeightUsed: numeric("shrinkage_weight_used", { precision: 4, scale: 3 }),
+  rationale: text("rationale"),
+  state: text("state").default("proposed"),
+  // 'proposed' | 'confirmed' | 'corrected' | 'rejected'
+  // --- Enriched output (added migration 0008) ---
+  p10Value: numeric("p10_value", { precision: 15, scale: 4 }),
+  p90Value: numeric("p90_value", { precision: 15, scale: 4 }),
+  intervalWidthRatio: numeric("interval_width_ratio", { precision: 6, scale: 3 }),
+  dataQualityScore: numeric("data_quality_score", { precision: 3, scale: 2 }),
+  evidenceToRequest: jsonb("evidence_to_request").default([]),
+  assumptions: text("assumptions"),
+  limitations: text("limitations"),
+  requiresHumanValidation: boolean("requires_human_validation").default(true),
+  method: text("method").default("peer_median"),
+  // 'peer_median'|'hierarchical_shrinkage'|'external_benchmark'|'rule_based_proxy'|'unavailable'
+  driverUsed: text("driver_used"),
+  denominatorValue: numeric("denominator_value", { precision: 15, scale: 2 }),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const userConfirmations = pgTable("user_confirmations", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  predictionId: uuid("prediction_id").references(() => predictions.id, { onDelete: "cascade" }).notNull(),
+  userId: uuid("user_id").references(() => users.id),
+  action: text("action").notNull(), // 'confirmed' | 'corrected' | 'rejected'
+  finalValue: numeric("final_value", { precision: 15, scale: 4 }),
+  // null if action='confirmed' (keep predicted_value), set if action='corrected'
+  correctionReason: text("correction_reason"),
+  // Flywheel: confirmed/corrected values feed back into distribution recomputation
+  usedInRecompute: boolean("used_in_recompute").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 // Relations
@@ -393,7 +491,7 @@ export const clusterDefinitionsRelations = relations(clusterDefinitions, ({ many
   distributions: many(sectorDistributions),
 }));
 
-export const sectorDistributionsRelations = relations(sectorDistributions, ({ one }) => ({
+export const sectorDistributionsRelations = relations(sectorDistributions, ({ one, many }) => ({
   cluster: one(clusterDefinitions, {
     fields: [sectorDistributions.clusterId],
     references: [clusterDefinitions.id],
@@ -401,6 +499,50 @@ export const sectorDistributionsRelations = relations(sectorDistributions, ({ on
   indicator: one(datapoints, {
     fields: [sectorDistributions.indicatorId],
     references: [datapoints.id],
+  }),
+  predictions: many(predictions),
+}));
+
+export const predictionRunsRelations = relations(predictionRuns, ({ one, many }) => ({
+  company: one(companies, {
+    fields: [predictionRuns.companyId],
+    references: [companies.id],
+  }),
+  project: one(projects, {
+    fields: [predictionRuns.projectId],
+    references: [projects.id],
+  }),
+  cluster: one(clusterDefinitions, {
+    fields: [predictionRuns.clusterId],
+    references: [clusterDefinitions.id],
+  }),
+  predictions: many(predictions),
+}));
+
+export const predictionsRelations = relations(predictions, ({ one, many }) => ({
+  run: one(predictionRuns, {
+    fields: [predictions.runId],
+    references: [predictionRuns.id],
+  }),
+  indicator: one(datapoints, {
+    fields: [predictions.indicatorId],
+    references: [datapoints.id],
+  }),
+  distribution: one(sectorDistributions, {
+    fields: [predictions.distributionId],
+    references: [sectorDistributions.id],
+  }),
+  confirmations: many(userConfirmations),
+}));
+
+export const userConfirmationsRelations = relations(userConfirmations, ({ one }) => ({
+  prediction: one(predictions, {
+    fields: [userConfirmations.predictionId],
+    references: [predictions.id],
+  }),
+  user: one(users, {
+    fields: [userConfirmations.userId],
+    references: [users.id],
   }),
 }));
 
@@ -429,6 +571,147 @@ export const evidenceLinksRelations = relations(evidenceLinks, ({ one }) => ({
   }),
   document: one(documents, {
     fields: [evidenceLinks.documentId],
+    references: [documents.id],
+  }),
+}));
+
+// ============================================================
+// ESG Full Schema -- Predictive Engine v1 ontology layer
+// ============================================================
+
+/**
+ * esgIndicators -- canonical ESG indicator registry
+ *
+ * The single source of truth for indicator IDs across all pillars (E, S, G).
+ * indicatorId in sectorDistributions / predictions should ideally reference this table.
+ * For backwards compat, sectorDistributions.indicatorId is still text; esgIndicatorId is the FK.
+ */
+export const esgIndicators = pgTable("esg_indicators", {
+  id: text("id").primaryKey(),
+  code: text("code").notNull(),
+  name: text("name").notNull(),
+  description: text("description"),
+  pillar: text("pillar").notNull(),
+  topic: text("topic").notNull(),
+  canonicalUnit: text("canonical_unit"),
+  allowedUnits: jsonb("allowed_units").default([]),
+  metricType: text("metric_type").notNull(),
+  frameworkMappings: jsonb("framework_mappings").default({}),
+  materialityDefaultBySector: jsonb("materiality_default_by_sector").default({}),
+  assuranceRelevance: text("assurance_relevance").default("medium"),
+  vsmeDisclosureId: text("vsme_disclosure_id"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/**
+ * indicatorDriverMap -- driver hierarchy per indicator (and optionally per cluster)
+ */
+export const indicatorDriverMap = pgTable("indicator_driver_map", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  indicatorId: text("indicator_id").references(() => esgIndicators.id).notNull(),
+  primaryDriver: text("primary_driver").notNull(),
+  secondaryDriver: text("secondary_driver"),
+  fallbackDriver: text("fallback_driver").notNull().default("employees"),
+  denominatorUnit: text("denominator_unit").notNull(),
+  intensityFormula: text("intensity_formula"),
+  fallbackFormula: text("fallback_formula"),
+  driverRequiredness: text("driver_requiredness").default("recommended"),
+  driverQualityImpact: text("driver_quality_impact"),
+  validForClusters: jsonb("valid_for_clusters").default(null),
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/**
+ * frameworkDisclosureMap -- multi-framework cross-reference with versioning
+ *
+ * Each row = one mapping from an internal ESG indicator to one external framework disclosure.
+ * framework_version is mandatory: ESRS, VSME, GRI change over time.
+ */
+export const frameworkDisclosureMap = pgTable("framework_disclosure_map", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  indicatorId: text("indicator_id").references(() => esgIndicators.id).notNull(),
+  framework: text("framework").notNull(),
+  frameworkVersion: text("framework_version").notNull(),
+  // e.g. "ESRS Set 1 (2023)", "VSME ED (2023)", "GRI 2021", "GRI 305:2016", "SASB 2023"
+  externalId: text("external_id").notNull(),
+  externalName: text("external_name"),
+  mappingType: text("mapping_type").default("direct"),
+  // 'direct' | 'partial' | 'proxy' | 'evidence' | 'narrative_support' | 'related'
+  applicabilityCondition: text("applicability_condition"),
+  disclosureObligation: text("disclosure_obligation"),
+  // 'mandatory' | 'voluntary' | 'conditional' | 'sector_specific'
+  validFrom: timestamp("valid_from"),
+  validTo: timestamp("valid_to"),
+  sourceReference: text("source_reference"),
+  // e.g. "ESRS E1, Appendix A, AR 46" or "GRI 305-2 para.a"
+  confidence: text("confidence").default("high"),
+  // 'high' | 'medium' | 'low' -- confidence in this mapping's correctness
+  notes: text("notes"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+/**
+ * certificationRecords -- certifications as evidence/control objects
+ *
+ * CRITICAL RULE: confidence_boost_allowed=true ONLY permits boosting confidence
+ * on boolean_control, categorical_maturity, or evidence_required metric types.
+ * It NEVER modifies quantitative_absolute or quantitative_intensity estimates
+ * (predicted_value, p25, p75, p10, p90).
+ */
+export const certificationRecords = pgTable("certification_records", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  companyId: uuid("company_id").references(() => companies.id, { onDelete: "cascade" }),
+  standardName: text("standard_name").notNull(),
+  standardVersion: text("standard_version"),
+  pillarCoverage: jsonb("pillar_coverage").default([]),
+  topicCoverage: jsonb("topic_coverage").default([]),
+  certifiable: boolean("certifiable").default(true),
+  issuerOrOwner: text("issuer_or_owner"),
+  certificationBody: text("certification_body"),
+  scope: text("scope").default("group"),
+  scopeDescription: text("scope_description"),
+  validFrom: timestamp("valid_from"),
+  validTo: timestamp("valid_to"),
+  evidenceDocumentId: uuid("evidence_document_id").references(() => documents.id, { onDelete: "set null" }),
+  assuranceLevel: text("assurance_level"),
+  mappedControls: jsonb("mapped_controls").default([]),
+  mappedDisclosures: jsonb("mapped_disclosures").default([]),
+  confidenceBoostAllowed: boolean("confidence_boost_allowed").default(true),
+  confidenceBoostScope: jsonb("confidence_boost_scope").default([]),
+  limitations: text("limitations"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+// ---- Relations for new tables ----
+
+export const esgIndicatorsRelations = relations(esgIndicators, ({ many }) => ({
+  driverMaps: many(indicatorDriverMap),
+  frameworkMappings: many(frameworkDisclosureMap),
+}));
+
+export const indicatorDriverMapRelations = relations(indicatorDriverMap, ({ one }) => ({
+  indicator: one(esgIndicators, {
+    fields: [indicatorDriverMap.indicatorId],
+    references: [esgIndicators.id],
+  }),
+}));
+
+export const frameworkDisclosureMapRelations = relations(frameworkDisclosureMap, ({ one }) => ({
+  indicator: one(esgIndicators, {
+    fields: [frameworkDisclosureMap.indicatorId],
+    references: [esgIndicators.id],
+  }),
+}));
+
+export const certificationRecordsRelations = relations(certificationRecords, ({ one }) => ({
+  company: one(companies, {
+    fields: [certificationRecords.companyId],
+    references: [companies.id],
+  }),
+  evidenceDocument: one(documents, {
+    fields: [certificationRecords.evidenceDocumentId],
     references: [documents.id],
   }),
 }));
