@@ -1,0 +1,42 @@
+company,indicator_id,extracted_value,status,actual_value,verification_note
+Pellicelli_Srl,total_energy_consumption,100.055,V,100.055,"100,055 kWh esplicito p73"
+La_Perla_di_Torino,total_energy_consumption,193.6,V,193.6,697 GJ ÷ 3.6 × 1000 = 193.6 MWh p10
+Alimenta_Produzioni,total_energy_consumption,15700.76,V,15700.76,verificato sessione precedente p22
+Ambro_Sol,total_energy_consumption,508.044,V,508.044,"508.044,00 kWh grafico p39"
+Packing_Srl,total_energy_consumption,1058.7,V,1058.7,fossili 741.8 = 70% → totale 1059.7 ≈ 1058.7 p34
+D_CIRCLE,total_energy_consumption,28.9,V,28.9,sum entity totals: 3.6+6.2+18.5+0.6=28.9 p28
+Vecomp,total_energy_consumption,754.9,V,754.9,GJ sum 2717.6 ÷ 3.6 = 754.9 p91
+CentoCinquanta,total_energy_consumption,3.098,V,3.098,"doc: '(3,098 MWh)' p53-54"
+Ottima_Srl,total_energy_consumption,31.941,V,31.941,consistente con tabella fonti p35
+Bianchi_Costruzioni,total_energy_consumption,2.744,V,2.744,"2.744 KWh highlights p4 = 2,744kWh = 2.744MWh"
+Simonelli_Group,total_energy_consumption,2249,V,2249,tabella p70: 2.249 MWh (IT) = 2249 MWh
+Stampa_Sud,total_energy_consumption,248.56,X,894.825,p62: 'fabbisogno 894.825 kWh'
+Casa_Optima,total_energy_consumption,20.56,X,20559,p50: TOTALE 74.014 GJ = 20.559 MWh (GWh/MWh error)
+Mineraria_Sacilese,scope_1_ghg_emissions,903.34,V,903.34,"tabella p15: Scope1=903,34 tCO2e"
+Pellicelli_Srl,scope_1_ghg_emissions,571.99,V,571.99,testo p74 + tabella p75
+La_Perla_di_Torino,scope_1_ghg_emissions,13.29,V,13.29,"tabella p11: Tot Scope1=13,29"
+Reynaldi,scope_1_ghg_emissions,62.51,V,62.51,"p23: scope2=0, totale=62,51"
+Vecomp,scope_1_ghg_emissions,131.32,V,131.32,"tabella p139: TOT SCOPE1=131,32"
+Agugiaro_Figna,scope_1_ghg_emissions,1529,V,1529,tabella p69: Totale Scope1=1.529 tCO2
+Packing_Srl,scope_1_ghg_emissions,215,X,,215 = scope_1+2 MB combined (p4 highlights)
+Ottima_Srl,scope_1_ghg_emissions,23702,X,23.702,"Kg column ÷1000: 23.702,03 kg = 23.702 t p39"
+Simonelli_Group,scope_1_ghg_emissions,321,X,224,tabella p76: Scope1=224 (321=scope2_mb)
+Mineraria_Sacilese,scope_2_location_based_ghg_emissions,3661,V,3661,tabella p15: Scope2=3.661 tCO2e
+Pellicelli_Srl,scope_2_location_based_ghg_emissions,15.13,V,15.13,"tabella p75: Scope2=15,13"
+La_Perla_di_Torino,scope_2_location_based_ghg_emissions,1.91,V,1.91,"tabella p11: Tot Scope2=1,91"
+Reynaldi,scope_2_location_based_ghg_emissions,0,V,0,p23: EE acquistata=0 (100% rinnovabile autoprod)
+Vecomp,scope_2_location_based_ghg_emissions,39.48,V,39.48,"tabella p139: TOT SCOPE2 LB=39,48"
+Simonelli_Group,scope_2_location_based_ghg_emissions,355,V,355,tabella p76: Scope2 LB=355
+Stampa_Sud,scope_2_location_based_ghg_emissions,48,X,135,p61: BT=48+MT=87=135 (solo BT estratto)
+Ottima_Srl,scope_2_location_based_ghg_emissions,7544,X,7.544,"Kg÷1000: 7.544,2 kg = 7.544 t p39"
+Mineraria_Sacilese,scope_2_market_based_ghg_emissions,3661,V,3661,stesso valore lb (no market distinction)
+La_Perla_di_Torino,scope_2_market_based_ghg_emissions,1.91,V,1.91,stesso valore lb
+Vecomp,scope_2_market_based_ghg_emissions,77.12,V,77.12,"tabella p139: TOT SCOPE2 MB=77,12"
+Simonelli_Group,scope_2_market_based_ghg_emissions,321,V,321,tabella p76: Scope2 MB=321
+Packing_Srl,scope_2_market_based_ghg_emissions,215,X,,215 = scope_1+2_mb combined (p4)
+Stampa_Sud,scope_2_market_based_ghg_emissions,48,X,,"BT only, MT missing; mb vs lb unclear"
+Ottima_Srl,scope_2_market_based_ghg_emissions,8606.12,X,8.606,"Kg÷1000: 8.606,12 kg = 8.606 t p39"
+Pellicelli_Srl,scope_3_total_ghg_emissions,10153.92,V,10153.92,"tabella p75: Scope3=10.153,92 tCO2e"
+La_Perla_di_Torino,scope_3_total_ghg_emissions,1494.25,V,1494.25,"tabella p11: Tot Scope3=1.494,25"
+Ottima_Srl,scope_3_total_ghg_emissions,218159,X,218.159,"Kg÷1000: 218.158,96 kg = 218.159 t p39"
+Simonelli_Group,scope_3_total_ghg_emissions,49290,X,389174,solo upstream; totale p76=389.174 (include downstream)
